@@ -9,6 +9,7 @@
 #include <GxEPD2_BW.h>
 #include <Fonts/FreeSansBold18pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
+#include <ArduinoJson.h>
 
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
@@ -16,7 +17,10 @@ SensirionI2CScd4x scd4x;
 
 const unsigned long UPDATE_INTERVAL = 20000;
 const int HISTORY_SIZE = 24;
+const int FORECAST_HOURS = 24;
 unsigned long lastUpdate = 0;
+unsigned long lastWeatherUpdate = 0;
+const unsigned long WEATHER_UPDATE_INTERVAL = 3600000; // 1 hour
 
 float tempAir = 0, humidity = 0, tempESP = 0, co2 = 0, pressure = 1000;
 float tempHistory[HISTORY_SIZE];
@@ -24,8 +28,74 @@ float humidHistory[HISTORY_SIZE];
 float co2History[HISTORY_SIZE];
 int historyIndex = 0;
 
+// Weather forecast data
+float forecastTemp[FORECAST_HOURS];
+float forecastRain[FORECAST_HOURS];
+String sunriseTime = "--:--";
+String sunsetTime = "--:--";
+bool weatherDataValid = false;
+
 float getDummyPressure() {
   return 1000.0;
+}
+
+void fetchWeatherForecast() {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected, skipping weather update");
+    return;
+  }
+  
+  Serial.println("Fetching weather forecast...");
+  HTTPClient http;
+  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.0440426&longitude=14.4220692&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain&daily=sunset,sunrise&wind_speed_unit=ms&forecast_hours=24");
+  
+  int httpCode = http.GET();
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (error) {
+      Serial.print("JSON parse error: ");
+      Serial.println(error.c_str());
+      http.end();
+      return;
+    }
+    
+    // Parse hourly temperature and rain
+    JsonArray tempArray = doc["hourly"]["temperature_2m"];
+    JsonArray rainArray = doc["hourly"]["rain"];
+    
+    for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
+      forecastTemp[i] = tempArray[i];
+      forecastRain[i] = rainArray[i];
+    }
+    
+    // Parse sunrise and sunset times
+    if (doc["daily"]["sunrise"][0]) {
+      String sunriseStr = doc["daily"]["sunrise"][0].as<String>();
+      sunriseTime = sunriseStr.substring(11, 16); // Extract HH:MM
+    }
+    
+    if (doc["daily"]["sunset"][0]) {
+      String sunsetStr = doc["daily"]["sunset"][0].as<String>();
+      sunsetTime = sunsetStr.substring(11, 16); // Extract HH:MM
+    }
+    
+    weatherDataValid = true;
+    Serial.println("Weather data updated successfully");
+    Serial.print("Sunrise: ");
+    Serial.print(sunriseTime);
+    Serial.print(" Sunset: ");
+    Serial.println(sunsetTime);
+  } else {
+    Serial.print("HTTP error: ");
+    Serial.println(httpCode);
+  }
+  
+  http.end();
 }
 
 void initSensors() {
@@ -100,17 +170,101 @@ void drawGraph(int x, int y, int w, int h, float* data, float minVal, float maxV
   }
 }
 
+void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, float minVal, float maxVal) {
+  display.drawRect(x, y, w, h, GxEPD_BLACK);
+  
+  for (int i = 1; i < dataSize; i++) {
+    int x1 = x + (i - 1) * w / dataSize;
+    int y1 = y + h - (data[i-1] - minVal) / (maxVal - minVal) * h;
+    int x2 = x + i * w / dataSize;
+    int y2 = y + h - (data[i] - minVal) / (maxVal - minVal) * h;
+    display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+  }
+}
+
+void drawRainColumns(int x, int y, int w, int h, float* data, int dataSize, float maxVal) {
+  display.drawRect(x, y, w, h, GxEPD_BLACK);
+  
+  int colWidth = w / dataSize;
+  for (int i = 0; i < dataSize; i++) {
+    if (data[i] > 0) {
+      int colHeight = (data[i] / maxVal) * h;
+      if (colHeight > 0) {
+        int x1 = x + i * colWidth;
+        int y1 = y + h - colHeight;
+        display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
+      }
+    }
+  }
+}
+
+void drawWeatherForecast() {
+  if (!weatherDataValid) return;
+  
+  int weatherY = 10;
+  int graphHeight = 180;  // Tripled from 60
+  int graphWidth = 480;   // Full width
+  
+  // Find min/max for temperature
+  float minTemp = forecastTemp[0], maxTemp = forecastTemp[0];
+  float maxRain = 0;
+  for (int i = 0; i < FORECAST_HOURS; i++) {
+    if (forecastTemp[i] < minTemp) minTemp = forecastTemp[i];
+    if (forecastTemp[i] > maxTemp) maxTemp = forecastTemp[i];
+    if (forecastRain[i] > maxRain) maxRain = forecastRain[i];
+  }
+  
+  // Add some padding to ranges
+  minTemp = floor(minTemp - 1);
+  maxTemp = ceil(maxTemp + 1);
+  if (maxRain < 0.5) maxRain = 0.5;
+  
+  // Draw sunrise/sunset info
+  display.setFont(&FreeSans9pt7b);
+  display.setCursor(10, weatherY + 15);
+  display.print("Sunrise: ");
+  display.print(sunriseTime);
+  display.setCursor(240, weatherY + 15);
+  display.print("Sunset: ");
+  display.print(sunsetTime);
+  
+  // Draw temperature forecast graph
+  display.setCursor(10, weatherY + 45);
+  display.print("Temp");
+  drawForecastGraph(10, weatherY + 50, graphWidth, graphHeight, forecastTemp, FORECAST_HOURS, minTemp, maxTemp);
+  
+  // Draw labels on right side
+  display.setCursor(420, weatherY + 60);
+  display.print(String((int)maxTemp) + "C");
+  display.setCursor(420, weatherY + 220);
+  display.print(String((int)minTemp) + "C");
+  
+  // Draw rain forecast columns (1/3 height)
+  int rainHeight = 60;
+  display.setCursor(10, weatherY + 255);
+  display.print("Rain");
+  drawRainColumns(10, weatherY + 260, graphWidth, rainHeight, forecastRain, FORECAST_HOURS, maxRain);
+  
+  if (maxRain > 0) {
+    display.setCursor(420, weatherY + 265);
+    display.print(String(maxRain, 1) + "mm");
+  }
+}
+
 void updateDisplay() {
   display.setFullWindow();
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
     
-    int weatherY = 160;
+    // Draw weather forecast at top
+    drawWeatherForecast();
+    
+    int weatherY = 340;
     display.drawLine(0, weatherY, 480, weatherY, GxEPD_BLACK);
     
     int contentY = weatherY + 20;
-    int rowHeight = 140;
+    int rowHeight = 100;
     
     display.setFont(&FreeSansBold18pt7b);
     display.setCursor(20, contentY + 40);
@@ -176,11 +330,29 @@ void setup() {
   initSensors();
   connectWiFi();
   
+  // Initialize weather forecast arrays
+  for (int i = 0; i < FORECAST_HOURS; i++) {
+    forecastTemp[i] = 0;
+    forecastRain[i] = 0;
+  }
+  
+  // Fetch weather forecast on startup
+  if (WiFi.status() == WL_CONNECTED) {
+    fetchWeatherForecast();
+  }
+  
   delay(5000);
   lastUpdate = millis() - UPDATE_INTERVAL;
+  lastWeatherUpdate = millis();
 }
 
 void loop() {
+  // Update weather forecast every hour
+  if (millis() - lastWeatherUpdate >= WEATHER_UPDATE_INTERVAL) {
+    lastWeatherUpdate = millis();
+    fetchWeatherForecast();
+  }
+  
   if (millis() - lastUpdate >= UPDATE_INTERVAL) {
     lastUpdate = millis();
     
