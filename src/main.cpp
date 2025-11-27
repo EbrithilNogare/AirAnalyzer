@@ -15,7 +15,7 @@ GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2
 Adafruit_AHTX0 aht;
 SensirionI2CScd4x scd4x;
 
-const unsigned long UPDATE_INTERVAL = 20000;
+const unsigned long UPDATE_INTERVAL = 120000;
 const int HISTORY_SIZE = 24;
 const int FORECAST_HOURS = 24;
 unsigned long lastUpdate = 0;
@@ -179,6 +179,8 @@ void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, fl
     int x2 = x + i * w / dataSize;
     int y2 = y + h - (data[i] - minVal) / (maxVal - minVal) * h;
     display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+    display.drawLine(x1, y1 + 1, x2, y2 + 1, GxEPD_BLACK);
+    display.drawLine(x1, y1 - 1, x2, y2 - 1, GxEPD_BLACK);
   }
 }
 
