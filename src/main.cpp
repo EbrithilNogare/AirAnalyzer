@@ -172,15 +172,77 @@ void drawGraph(int x, int y, int w, int h, float* data, float minVal, float maxV
 
 void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, float minVal, float maxVal) {
   display.drawRect(x, y, w, h, GxEPD_BLACK);
-  
+
+  // Guard against degenerate range
+  float range = maxVal - minVal;
+  if (range <= 0.001) range = 1.0;
+
+  // Draw horizontal 'grey' grid lines every 5 degrees (e.g. -5, 0, 5, 10...)
+  // We approximate grey by drawing a dashed line (less ink than solid line).
+  int firstLine = (int)ceil((minVal) / 5.0) * 5; // first multiple of 5 >= minVal
+  for (int t = firstLine; t <= (int)maxVal; t += 5) {
+    float val = (float)t;
+    // compute y position for this temperature value
+    int yy = y + h - (int)((val - minVal) / range * h);
+    if (yy < y || yy > y + h) continue;
+    // dashed horizontal: segments of 3 pixels on, 3 pixels off
+    for (int xx = x + 1; xx < x + w - 1; xx += 6) {
+      int segW = min(3, x + w - 1 - xx);
+      display.drawLine(xx, yy, xx + segW - 1, yy, GxEPD_BLACK);
+    }
+  }
+
+  // If 0 degrees is inside the range, draw a solid horizontal line for 0°C
+  if (minVal <= 0.0 && maxVal >= 0.0) {
+    int y0 = y + h - (int)((0.0 - minVal) / range * h);
+    if (y0 >= y && y0 <= y + h) {
+      display.drawLine(x + 1, y0, x + w - 2, y0, GxEPD_BLACK);
+      display.drawLine(x + 1, y0 + 1, x + w - 2, y0 + 1, GxEPD_BLACK);
+    }
+  }
+
+  // Draw vertical 'grey' grid lines every 2 hours (0,2,4...)
+  // position at each hour index; dashed to appear lighter
+  for (int i = 0; i < dataSize; i++) {
+    if ((i % 2) != 0) continue; // only every 2 hours
+    int xx = x + i * w / dataSize;
+    if (xx < x || xx > x + w) continue;
+    // dashed vertical: segments of 3 pixels on, 3 pixels off
+    for (int yy = y + 2; yy < y + h - 2; yy += 6) {
+      int segH = min(3, y + h - 2 - yy);
+      display.drawLine(xx, yy, xx, yy + segH - 1, GxEPD_BLACK);
+    }
+  }
+
+  // Solid vertical lines for midnight (hour 0) and midday (hour 12) if present
+  if (dataSize > 0) {
+    if (0 < dataSize) {
+      int xx0 = x + 0 * w / dataSize;
+      if (xx0 >= x && xx0 <= x + w) {
+        display.drawLine(xx0, y + 1, xx0, y + h - 2, GxEPD_BLACK);
+        display.drawLine(xx0 + 1, y + 1, xx0 + 1, y + h - 2, GxEPD_BLACK);
+      }
+    }
+    if (12 < dataSize) {
+      int xx12 = x + 12 * w / dataSize;
+      if (xx12 >= x && xx12 <= x + w) {
+        display.drawLine(xx12, y + 1, xx12, y + h - 2, GxEPD_BLACK);
+        display.drawLine(xx12 + 1, y + 1, xx12 + 1, y + h - 2, GxEPD_BLACK);
+      }
+    }
+  }
+
+  // Draw the forecast polyline (solid, slightly thickened)
   for (int i = 1; i < dataSize; i++) {
     int x1 = x + (i - 1) * w / dataSize;
-    int y1 = y + h - (data[i-1] - minVal) / (maxVal - minVal) * h;
+    int y1 = y + h - (int)((data[i-1] - minVal) / range * h);
     int x2 = x + i * w / dataSize;
-    int y2 = y + h - (data[i] - minVal) / (maxVal - minVal) * h;
-    display.drawLine(x1, y1, x2, y2, GxEPD_BLACK);
+    int y2 = y + h - (int)((data[i] - minVal) / range * h);
+    display.drawLine(x1, y1 + 2, x2, y2 + 2, GxEPD_BLACK);
     display.drawLine(x1, y1 + 1, x2, y2 + 1, GxEPD_BLACK);
+    display.drawLine(x1, y1    , x2, y2    , GxEPD_BLACK);
     display.drawLine(x1, y1 - 1, x2, y2 - 1, GxEPD_BLACK);
+    display.drawLine(x1, y1 - 2, x2, y2 - 2, GxEPD_BLACK);
   }
 }
 
