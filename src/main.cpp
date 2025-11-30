@@ -8,7 +8,7 @@
 #include <SensirionI2CScd4x.h>
 #include <GxEPD2_BW.h>
 #include <Fonts/FreeSansBold18pt7b.h>
-#include <Fonts/FreeSans9pt7b.h>
+#include <Fonts/FreeSans18pt7b.h>
 #include <ArduinoJson.h>
 
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
@@ -117,7 +117,8 @@ void initDisplay() {
   delay(100);
   
   display.init(115200, true, 2, false);
-  display.setRotation(3);
+  // rotate by 90 degrees to landscape
+  display.setRotation(2);
   display.setTextColor(GxEPD_BLACK);
 }
 
@@ -169,6 +170,19 @@ void drawGraph(int x, int y, int w, int h, float* data, float minVal, float maxV
     }
   }
 }
+void drawDashedHLine(int x1, int x2, int y, int onLen=3, int offLen=3) {
+  for (int xx = x1; xx <= x2; xx += onLen + offLen) {
+    int segW = min(onLen, x2 - xx + 1);
+    if (segW > 0) display.drawLine(xx, y, xx + segW - 1, y, GxEPD_BLACK);
+  }
+}
+
+void drawDashedVLine(int y1, int y2, int x, int onLen=3, int offLen=3) {
+  for (int yy = y1; yy <= y2; yy += onLen + offLen) {
+    int segH = min(onLen, y2 - yy + 1);
+    if (segH > 0) display.drawLine(x, yy, x, yy + segH - 1, GxEPD_BLACK);
+  }
+}
 
 void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, float minVal, float maxVal) {
   display.drawRect(x, y, w, h, GxEPD_BLACK);
@@ -177,98 +191,74 @@ void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, fl
   float range = maxVal - minVal;
   if (range <= 0.001) range = 1.0;
 
-  // Draw horizontal 'grey' grid lines every 5 degrees (e.g. -5, 0, 5, 10...)
-  // We approximate grey by drawing a dashed line (less ink than solid line).
-  int firstLine = (int)ceil((minVal) / 5.0) * 5; // first multiple of 5 >= minVal
-  for (int t = firstLine; t <= (int)maxVal; t += 5) {
+  // Horizontal lines every 10 degrees (dashed), solid for 0°C
+  int firstLine = (int)floor(minVal / 10.0) * 10;
+  for (int t = firstLine; t <= (int)ceil(maxVal); t += 10) {
     float val = (float)t;
-    // compute y position for this temperature value
     int yy = y + h - (int)((val - minVal) / range * h);
     if (yy < y || yy > y + h) continue;
-    // dashed horizontal: segments of 3 pixels on, 3 pixels off
-    for (int xx = x + 1; xx < x + w - 1; xx += 6) {
-      int segW = min(3, x + w - 1 - xx);
-      display.drawLine(xx, yy, xx + segW - 1, yy, GxEPD_BLACK);
+    if (t == 0) {
+      display.drawLine(x + 1, yy, x + w - 2, yy, GxEPD_BLACK);
+    } else {
+      drawDashedHLine(x + 1, x + w - 2, yy);
     }
   }
 
-  // If 0 degrees is inside the range, draw a solid horizontal line for 0°C
-  if (minVal <= 0.0 && maxVal >= 0.0) {
-    int y0 = y + h - (int)((0.0 - minVal) / range * h);
-    if (y0 >= y && y0 <= y + h) {
-      display.drawLine(x + 1, y0, x + w - 2, y0, GxEPD_BLACK);
-      display.drawLine(x + 1, y0 + 1, x + w - 2, y0 + 1, GxEPD_BLACK);
+  // Vertical dashed lines for every even hour, solid for 12 and right edge
+  for (int i = 0; i <= dataSize; i++) {
+    if (i == dataSize) {
+      // rightmost full line represents 24h
+      int xx = x + w;
+      display.drawLine(xx, y + 1, xx, y + h - 1, GxEPD_BLACK);
+      continue;
     }
-  }
-
-  // Draw vertical 'grey' grid lines every 2 hours (0,2,4...)
-  // position at each hour index; dashed to appear lighter
-  for (int i = 0; i < dataSize; i++) {
-    if ((i % 2) != 0) continue; // only every 2 hours
     int xx = x + i * w / dataSize;
-    if (xx < x || xx > x + w) continue;
-    // dashed vertical: segments of 3 pixels on, 3 pixels off
-    for (int yy = y + 2; yy < y + h - 2; yy += 6) {
-      int segH = min(3, y + h - 2 - yy);
-      display.drawLine(xx, yy, xx, yy + segH - 1, GxEPD_BLACK);
-    }
-  }
-
-  // Solid vertical lines for midnight (hour 0) and midday (hour 12) if present
-  if (dataSize > 0) {
-    if (0 < dataSize) {
-      int xx0 = x + 0 * w / dataSize;
-      if (xx0 >= x && xx0 <= x + w) {
-        display.drawLine(xx0, y + 1, xx0, y + h - 2, GxEPD_BLACK);
-        display.drawLine(xx0 + 1, y + 1, xx0 + 1, y + h - 2, GxEPD_BLACK);
-      }
-    }
-    if (12 < dataSize) {
-      int xx12 = x + 12 * w / dataSize;
-      if (xx12 >= x && xx12 <= x + w) {
-        display.drawLine(xx12, y + 1, xx12, y + h - 2, GxEPD_BLACK);
-        display.drawLine(xx12 + 1, y + 1, xx12 + 1, y + h - 2, GxEPD_BLACK);
+    if ((i % 2) == 0) {
+      if (i == 12) {
+        display.drawLine(xx, y + 1, xx, y + h - 1, GxEPD_BLACK);
+      } else {
+        drawDashedVLine(y + 2, y + h - 2, xx);
       }
     }
   }
 
-  // Draw the forecast polyline (solid, slightly thickened)
+  // Draw temperature polyline thick (5px)
   for (int i = 1; i < dataSize; i++) {
     int x1 = x + (i - 1) * w / dataSize;
     int y1 = y + h - (int)((data[i-1] - minVal) / range * h);
     int x2 = x + i * w / dataSize;
     int y2 = y + h - (int)((data[i] - minVal) / range * h);
-    display.drawLine(x1, y1 + 2, x2, y2 + 2, GxEPD_BLACK);
-    display.drawLine(x1, y1 + 1, x2, y2 + 1, GxEPD_BLACK);
-    display.drawLine(x1, y1    , x2, y2    , GxEPD_BLACK);
-    display.drawLine(x1, y1 - 1, x2, y2 - 1, GxEPD_BLACK);
-    display.drawLine(x1, y1 - 2, x2, y2 - 2, GxEPD_BLACK);
+    for (int off = -2; off <= 2; off++) {
+      display.drawLine(x1, y1 + off, x2, y2 + off, GxEPD_BLACK);
+    }
   }
 }
 
 void drawRainColumns(int x, int y, int w, int h, float* data, int dataSize, float maxVal) {
   display.drawRect(x, y, w, h, GxEPD_BLACK);
-  
-  int colWidth = w / dataSize;
+
+  int colWidth = max(1, w / dataSize);
   for (int i = 0; i < dataSize; i++) {
-    if (data[i] > 0) {
-      int colHeight = (data[i] / maxVal) * h;
-      if (colHeight > 0) {
-        int x1 = x + i * colWidth;
-        int y1 = y + h - colHeight;
-        display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
-      }
-    }
+    float v = data[i];
+    if (v <= 0) continue;
+    int colHeight = (int)((v / maxVal) * h);
+    if (colHeight < 1) colHeight = 1;
+    int x1 = x + i * colWidth;
+    int y1 = y; // start at top and grow downward for "upside down"
+    display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
   }
 }
 
 void drawWeatherForecast() {
   if (!weatherDataValid) return;
-  
-  int weatherY = 10;
-  int graphHeight = 180;  // Tripled from 60
-  int graphWidth = 480;   // Full width
-  
+  int screenW = display.width();
+  int screenH = display.height();
+
+  int weatherY = 8;
+  int graphWidth = (screenW * 90) / 100; // 90% of width
+  int graphX = (screenW - graphWidth) / 2;
+  int graphHeight = (screenH * 50) / 100; // 50% of height
+
   // Find min/max for temperature
   float minTemp = forecastTemp[0], maxTemp = forecastTemp[0];
   float maxRain = 0;
@@ -278,41 +268,46 @@ void drawWeatherForecast() {
     if (forecastRain[i] > maxRain) maxRain = forecastRain[i];
   }
   
-  // Add some padding to ranges
-  minTemp = floor(minTemp - 1);
-  maxTemp = ceil(maxTemp + 1);
-  if (maxRain < 0.5) maxRain = 0.5;
-  
-  // Draw sunrise/sunset info
-  display.setFont(&FreeSans9pt7b);
-  display.setCursor(10, weatherY + 15);
-  display.print("Sunrise: ");
-  display.print(sunriseTime);
-  display.setCursor(240, weatherY + 15);
-  display.print("Sunset: ");
-  display.print(sunsetTime);
-  
-  // Draw temperature forecast graph
-  display.setCursor(10, weatherY + 45);
-  display.print("Temp");
-  drawForecastGraph(10, weatherY + 50, graphWidth, graphHeight, forecastTemp, FORECAST_HOURS, minTemp, maxTemp);
-  
-  // Draw labels on right side
-  display.setCursor(420, weatherY + 60);
-  display.print(String((int)maxTemp) + "C");
-  display.setCursor(420, weatherY + 220);
-  display.print(String((int)minTemp) + "C");
-  
-  // Draw rain forecast columns (1/3 height)
-  int rainHeight = 60;
-  display.setCursor(10, weatherY + 255);
-  display.print("Rain");
-  drawRainColumns(10, weatherY + 260, graphWidth, rainHeight, forecastRain, FORECAST_HOURS, maxRain);
-  
-  if (maxRain > 0) {
-    display.setCursor(420, weatherY + 265);
-    display.print(String(maxRain, 1) + "mm");
+  // Add some padding to ranges and round to whole numbers for side labels
+  minTemp = floor(minTemp);
+  maxTemp = ceil(maxTemp);
+  if (minTemp == maxTemp) { minTemp -= 1; maxTemp += 1; }
+  if (maxRain < 1.0) maxRain = 1.0; // minimum scale 1mm
+
+  // Top row: hour labels (only even hours)
+  display.setFont(&FreeSans18pt7b);
+  int hourY = weatherY + 18; // top small margin
+  for (int i = 0; i < FORECAST_HOURS; i++) {
+    if ((i % 2) != 0) continue; // only even hours
+    int xx = graphX + i * graphWidth / FORECAST_HOURS;
+    String hlabel = String(i);
+    int16_t tbx, tby; uint16_t tbw, tbh;
+    display.getTextBounds(hlabel, xx, hourY, &tbx, &tby, &tbw, &tbh);
+    display.setCursor(xx - tbw/2, hourY);
+    display.print(hlabel);
   }
+
+  // Temperature graph (takes 50% height)
+  int tempGraphY = weatherY + 28;
+  drawForecastGraph(graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, FORECAST_HOURS, minTemp, maxTemp);
+
+  // Right side max/min labels (whole numbers)
+  display.setFont(&FreeSansBold18pt7b);
+  int labelX = graphX + graphWidth + 6;
+  display.setCursor(labelX, tempGraphY + 18);
+  display.print(String((int)maxTemp) + "C");
+  display.setCursor(labelX, tempGraphY + graphHeight - 4);
+  display.print(String((int)minTemp) + "C");
+
+  // Rain area: immediately below temperature graph, height = 1/3 of tempGraphHeight
+  int rainHeight = max(12, graphHeight / 3);
+  int rainY = tempGraphY + graphHeight; // seamless, no spacing
+  drawRainColumns(graphX, rainY, graphWidth, rainHeight, forecastRain, FORECAST_HOURS, maxRain);
+
+  // Right side max rain label
+  display.setFont(&FreeSans18pt7b);
+  display.setCursor(labelX, rainY + 18);
+  display.print(String((int)ceil(maxRain)) + "mm");
 }
 
 void updateDisplay() {
@@ -320,45 +315,40 @@ void updateDisplay() {
   display.firstPage();
   do {
     display.fillScreen(GxEPD_WHITE);
-    
-    // Draw weather forecast at top
+    // Draw weather forecast at top (large section)
     drawWeatherForecast();
-    
-    int weatherY = 340;
-    display.drawLine(0, weatherY, 480, weatherY, GxEPD_BLACK);
-    
-    int contentY = weatherY + 20;
-    int rowHeight = 100;
-    
-    display.setFont(&FreeSansBold18pt7b);
-    display.setCursor(20, contentY + 40);
-    display.print("Temp: ");
-    display.print(tempAir, 1);
-    display.print("C");
-    
-    drawGraph(300, contentY + 10, 160, 60, tempHistory, 15, 30);
-    
-    display.setCursor(20, contentY + rowHeight + 40);
-    display.print("Hum: ");
-    display.print(humidity, 1);
-    display.print("%");
-    
-    drawGraph(300, contentY + rowHeight + 10, 160, 60, humidHistory, 20, 80);
-    
-    display.setCursor(20, contentY + 2*rowHeight + 40);
-    display.print("CO2: ");
-    display.print((int)co2);
-    display.print("ppm");
-    
-    drawGraph(300, contentY + 2*rowHeight + 10, 160, 60, co2History, 400, 2000);
-    
-    display.setFont(&FreeSans9pt7b);
-    display.setCursor(20, 780);
-    display.print("Pressure: ");
-    display.print((int)pressure);
-    display.print(" hPa | ESP: ");
-    display.print(tempESP, 1);
-    display.print("C");
+
+    // Bottom area: icons placeholders (bottom 1/5 of screen)
+    int screenW = display.width();
+    int screenH = display.height();
+    int bottomH = max(64, screenH / 5);
+    int bottomY = screenH - bottomH - 6;
+
+    // Draw 6 icon placeholders (64x64) evenly spaced, values under each
+    int icons = 6;
+    int iconSize = 64;
+    int gap = (screenW - icons * iconSize) / (icons + 1);
+    int iconY = bottomY + 2;
+    display.setFont(&FreeSans18pt7b);
+    for (int i = 0; i < icons; i++) {
+      int ix = gap + i * (iconSize + gap);
+      display.drawRect(ix, iconY, iconSize, iconSize, GxEPD_BLACK);
+      // value under icon
+      int valY = iconY + iconSize + 20;
+      String v;
+      switch (i) {
+        case 0: v = String(tempAir, 1) + "C"; break;
+        case 1: v = String((int)co2); break;
+        case 2: v = sunriseTime; break;
+        case 3: v = sunsetTime; break;
+        case 4: v = String((int)humidity) + "%"; break;
+        case 5: v = String((int)pressure); break;
+      }
+      int16_t tbx, tby; uint16_t tbw, tbh;
+      display.getTextBounds(v, ix + iconSize/2, valY, &tbx, &tby, &tbw, &tbh);
+      display.setCursor(ix + iconSize/2 - tbw/2, valY + tbh/2);
+      display.print(v);
+    }
   } while (display.nextPage());
 }
 
