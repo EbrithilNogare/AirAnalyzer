@@ -11,6 +11,15 @@
 #include <Fonts/FreeSans18pt7b.h>
 #include <ArduinoJson.h>
 
+// icons
+#include "icons/temp.icon.h"
+#include "icons/humidity.icon.h"
+#include "icons/pressure.icon.h"
+#include "icons/sunrise.icon.h"
+#include "icons/sunset.icon.h"
+#include "icons/co2.icon.h"
+
+
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
 SensirionI2CScd4x scd4x;
@@ -185,7 +194,6 @@ void drawDashedVLine(int y1, int y2, int x, int onLen=3, int offLen=3) {
 }
 
 void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, float minVal, float maxVal) {
-  display.drawRect(x, y, w, h, GxEPD_BLACK);
 
   // Guard against degenerate range
   float range = maxVal - minVal;
@@ -204,14 +212,8 @@ void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, fl
     }
   }
 
-  // Vertical dashed lines for every even hour, solid for 12 and right edge
-  for (int i = 0; i <= dataSize; i++) {
-    if (i == dataSize) {
-      // rightmost full line represents 24h
-      int xx = x + w;
-      display.drawLine(xx, y + 1, xx, y + h - 1, GxEPD_BLACK);
-      continue;
-    }
+  // Vertical dashed lines for every even hour, solid for 12 (no outer border)
+  for (int i = 0; i < dataSize; i++) {
     int xx = x + i * w / dataSize;
     if ((i % 2) == 0) {
       if (i == 12) {
@@ -235,8 +237,6 @@ void drawForecastGraph(int x, int y, int w, int h, float* data, int dataSize, fl
 }
 
 void drawRainColumns(int x, int y, int w, int h, float* data, int dataSize, float maxVal) {
-  display.drawRect(x, y, w, h, GxEPD_BLACK);
-
   int colWidth = max(1, w / dataSize);
   for (int i = 0; i < dataSize; i++) {
     float v = data[i];
@@ -255,8 +255,9 @@ void drawWeatherForecast() {
   int screenH = display.height();
 
   int weatherY = 8;
-  int graphWidth = (screenW * 90) / 100; // 90% of width
-  int graphX = (screenW - graphWidth) / 2;
+  // Make graph span full width with a small left/right margin
+  int graphX = 4;
+  int graphWidth = screenW - 8;
   int graphHeight = (screenH * 50) / 100; // 50% of height
 
   // Find min/max for temperature
@@ -291,23 +292,23 @@ void drawWeatherForecast() {
   int tempGraphY = weatherY + 28;
   drawForecastGraph(graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, FORECAST_HOURS, minTemp, maxTemp);
 
-  // Right side max/min labels (whole numbers)
+  // Max/min labels (whole numbers) without unit suffixes
   display.setFont(&FreeSansBold18pt7b);
-  int labelX = graphX + graphWidth + 6;
-  display.setCursor(labelX, tempGraphY + 18);
-  display.print(String((int)maxTemp) + "C");
-  display.setCursor(labelX, tempGraphY + graphHeight - 4);
-  display.print(String((int)minTemp) + "C");
+  int labelX = graphX + graphWidth - 28; // place labels inside right edge of graph
+  display.setCursor(labelX, tempGraphY + 32);
+  display.print(String((int)maxTemp));
+  display.setCursor(labelX, tempGraphY + graphHeight - 14);
+  display.print(String((int)minTemp));
 
   // Rain area: immediately below temperature graph, height = 1/3 of tempGraphHeight
   int rainHeight = max(12, graphHeight / 3);
   int rainY = tempGraphY + graphHeight; // seamless, no spacing
   drawRainColumns(graphX, rainY, graphWidth, rainHeight, forecastRain, FORECAST_HOURS, maxRain);
 
-  // Right side max rain label
+  // Max rain label without unit suffix
   display.setFont(&FreeSans18pt7b);
-  display.setCursor(labelX, rainY + 18);
-  display.print(String((int)ceil(maxRain)) + "mm");
+  display.setCursor(labelX, rainY + 32);
+  display.print(String((int)ceil(maxRain)));
 }
 
 void updateDisplay() {
@@ -322,7 +323,7 @@ void updateDisplay() {
     int screenW = display.width();
     int screenH = display.height();
     int bottomH = max(64, screenH / 5);
-    int bottomY = screenH - bottomH - 6;
+    int bottomY = screenH - bottomH - 16;
 
     // Draw 6 icon placeholders (64x64) evenly spaced, values under each
     int icons = 6;
@@ -332,22 +333,43 @@ void updateDisplay() {
     display.setFont(&FreeSans18pt7b);
     for (int i = 0; i < icons; i++) {
       int ix = gap + i * (iconSize + gap);
-      display.drawRect(ix, iconY, iconSize, iconSize, GxEPD_BLACK);
       // value under icon
       int valY = iconY + iconSize + 20;
       String v;
       switch (i) {
         case 0: v = String(tempAir, 1) + "C"; break;
-        case 1: v = String((int)co2); break;
+        // swapped: place humidity at index 1
+        case 1: v = String((int)humidity) + "%"; break;
         case 2: v = sunriseTime; break;
         case 3: v = sunsetTime; break;
-        case 4: v = String((int)humidity) + "%"; break;
+        // swapped: place CO2 at index 4
+        case 4: v = String((int)co2); break;
         case 5: v = String((int)pressure); break;
       }
+      // draw value text in bold
+      display.setFont(&FreeSansBold18pt7b);
       int16_t tbx, tby; uint16_t tbw, tbh;
       display.getTextBounds(v, ix + iconSize/2, valY, &tbx, &tby, &tbw, &tbh);
       display.setCursor(ix + iconSize/2 - tbw/2, valY + tbh/2);
       display.print(v);
+      // restore regular font for other UI
+      display.setFont(&FreeSans18pt7b);
+
+      // draw the corresponding 64x64 icon bitmap centered in the placeholder area
+      const int iconW = 64;
+      const int iconH = 64;
+      int iconDrawX = ix + (iconSize - iconW) / 2;
+      int iconDrawY = iconY + (iconSize - iconH) / 2;
+      switch (i) {
+        case 0: display.drawBitmap(iconDrawX, iconDrawY, temp_icon_bits, iconW, iconH, GxEPD_BLACK); break;
+        // swapped: draw humidity icon at index 1
+        case 1: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_humidity, iconW, iconH, GxEPD_BLACK); break;
+        case 2: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_sunrise, iconW, iconH, GxEPD_BLACK); break;
+        case 3: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_sunset, iconW, iconH, GxEPD_BLACK); break;
+        // swapped: draw CO2 icon at index 4
+        case 4: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_co2, iconW, iconH, GxEPD_BLACK); break;
+        case 5: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_pressure, iconW, iconH, GxEPD_BLACK); break;
+      }
     }
   } while (display.nextPage());
 }
