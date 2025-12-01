@@ -39,17 +39,6 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 		}
 	}
 
-	for (int i = 0; i < dataSize; i++) {
-		int xx = x + i * w / dataSize;
-		if ((i % 2) == 0) {
-			if (i == 12) {
-				display.drawLine(xx, y + 1, xx, y + h - 1, GxEPD_BLACK);
-			} else {
-				drawDashedVLine(display, y + 2, y + h - 2, xx);
-			}
-		}
-	}
-
 	for (int i = 1; i < dataSize; i++) {
 		int x1 = x + (i - 1) * w / dataSize;
 		int y1 = y + h - static_cast<int>(((data[i - 1] - minVal) / range) * h);
@@ -77,7 +66,7 @@ void drawRainColumns(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::H
 
 void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
 						const float* forecastTemp, const float* forecastRain, int forecastHours,
-						const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
+						int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
 	if (!weatherDataValid) return;
 	int screenW = display.width();
 	int screenH = display.height();
@@ -99,20 +88,31 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 	if (minTemp == maxTemp) { minTemp -= 1; maxTemp += 1; }
 	if (maxRain < 1.0f) maxRain = 1.0f;
 
-	display.setFont(&FreeSans18pt7b);
+	int tempGraphY = weatherY + 28;
+	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
+
+	// Draw vertical lines and hour labels only at even hours
+	display.setFont(&FreeSans12pt7b);
 	int hourY = weatherY + 18;
 	for (int i = 0; i < forecastHours; i++) {
-		if ((i % 2) != 0) continue;
+		int hour = (forecastStartHour + i) % 24;
+		if (hour % 2 != 0) continue; // Only even hours
 		int xx = graphX + i * graphWidth / forecastHours;
-		String hlabel = String(i);
+		
+		// Draw hour label
+		String hlabel = String(hour);
 		int16_t tbx, tby; uint16_t tbw, tbh;
 		display.getTextBounds(hlabel, xx, hourY, &tbx, &tby, &tbw, &tbh);
 		display.setCursor(xx - tbw / 2, hourY);
 		display.print(hlabel);
+		
+		// Draw vertical line (thick for 00:00 and 12:00, dashed for others)
+		if (hour == 0 || hour == 12) {
+			display.drawLine(xx, tempGraphY + 1, xx, tempGraphY + graphHeight - 1, GxEPD_BLACK);
+		} else {
+			drawDashedVLine(display, tempGraphY + 2, tempGraphY + graphHeight - 2, xx);
+		}
 	}
-
-	int tempGraphY = weatherY + 28;
-	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
 
 	display.setFont(&FreeSansBold18pt7b);
 	int labelX = graphX + graphWidth - 28;
@@ -134,12 +134,12 @@ void updateDisplay(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEI
 				   float tempAir, float humidity, float co2, float pressure,
 				   const String& sunriseTime, const String& sunsetTime,
 				   const float* forecastTemp, const float* forecastRain, int forecastHours,
-				   bool weatherDataValid) {
+				   int forecastStartHour, bool weatherDataValid) {
 	display.setFullWindow();
 	display.firstPage();
 	do {
 		display.fillScreen(GxEPD_WHITE);
-		drawWeatherForecast(display, forecastTemp, forecastRain, forecastHours, sunriseTime, sunsetTime, weatherDataValid);
+		drawWeatherForecast(display, forecastTemp, forecastRain, forecastHours, forecastStartHour, sunriseTime, sunsetTime, weatherDataValid);
 
 		int screenW = display.width();
 		int screenH = display.height();

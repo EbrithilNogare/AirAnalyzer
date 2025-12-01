@@ -11,9 +11,9 @@
 #include "rendering.h"
 #include <esp_sleep.h>
 
-#define LOGGING_ENABLED true
+#define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 21 * 1000;
+const unsigned long UPDATE_INTERVAL_MS = 30 * 1000;
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 const int FORECAST_HOURS = 24;
 
@@ -28,6 +28,7 @@ RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
 RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
 RTC_DATA_ATTR char rtc_sunriseTimeStr[6] = "--:--";
 RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
+RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
@@ -82,7 +83,7 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
-  for (int i = 0; i < 50 && WiFi.status() != WL_CONNECTED; i++) {
+  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
     delay(500);
   }
   
@@ -129,6 +130,13 @@ void fetchWeatherForecast() {
     // Parse hourly temperature and rain
     JsonArray tempArray = doc["hourly"]["temperature_2m"];
     JsonArray rainArray = doc["hourly"]["rain"];
+    JsonArray timeArray = doc["hourly"]["time"];
+    
+    // Extract starting hour from first time entry (format: "2025-12-01T20:00")
+    if (timeArray.size() > 0) {
+      String firstTime = timeArray[0].as<String>();
+      rtc_forecastStartHour = firstTime.substring(11, 13).toInt();
+    }
     
     for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
       rtc_forecastTemp[i] = tempArray[i];
@@ -232,6 +240,7 @@ void setup() {
     rtc_forecastTemp,
     rtc_forecastRain,
     FORECAST_HOURS,
+    rtc_forecastStartHour,
     rtc_weatherDataValid
   );
   
