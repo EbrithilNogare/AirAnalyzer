@@ -9,99 +9,38 @@
 #include <GxEPD2_BW.h>
 #include <ArduinoJson.h>
 #include "rendering.h"
+#include <esp_sleep.h>
+
+#define LOGGING_ENABLED true
+
+const unsigned long UPDATE_INTERVAL_MS = 21 * 1000;
+const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
+const int FORECAST_HOURS = 24;
+
 
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
 SensirionI2CScd4x scd4x;
 
-const unsigned long UPDATE_INTERVAL = 120000;
-const int HISTORY_SIZE = 24;
-const int FORECAST_HOURS = 24;
-unsigned long lastUpdate = 0;
-unsigned long lastWeatherUpdate = 0;
-const unsigned long WEATHER_UPDATE_INTERVAL = 3600000; // 1 hour
-
 float tempAir = 0, humidity = 0, tempESP = 0, co2 = 0, pressure = 1000;
-float tempHistory[HISTORY_SIZE];
-float humidHistory[HISTORY_SIZE];
-float co2History[HISTORY_SIZE];
-int historyIndex = 0;
 
-// Weather forecast data
-float forecastTemp[FORECAST_HOURS];
-float forecastRain[FORECAST_HOURS];
-String sunriseTime = "--:--";
-String sunsetTime = "--:--";
-bool weatherDataValid = false;
+RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
+RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
+RTC_DATA_ATTR char rtc_sunriseTimeStr[6] = "--:--";
+RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
+RTC_DATA_ATTR bool rtc_weatherDataValid = false;
+RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
+RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
 
-float getDummyPressure() {
-  return 1000.0;
-}
-
-void fetchWeatherForecast() {
-  if (WiFi.status() != WL_CONNECTED) {
-    Serial.println("WiFi not connected, skipping weather update");
-    return;
-  }
-  
-  Serial.println("Fetching weather forecast...");
-  HTTPClient http;
-  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.0550&longitude=14.4183&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain&daily=sunset,sunrise&wind_speed_unit=ms&forecast_hours=24");
-  
-  int httpCode = http.GET();
-  
-  if (httpCode == 200) {
-    String payload = http.getString();
-    
-    JsonDocument doc;
-    DeserializationError error = deserializeJson(doc, payload);
-    
-    if (error) {
-      Serial.print("JSON parse error: ");
-      Serial.println(error.c_str());
-      http.end();
-      return;
-    }
-    
-    // Parse hourly temperature and rain
-    JsonArray tempArray = doc["hourly"]["temperature_2m"];
-    JsonArray rainArray = doc["hourly"]["rain"];
-    
-    for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
-      forecastTemp[i] = tempArray[i];
-      forecastRain[i] = rainArray[i];
-    }
-    
-    // Parse sunrise and sunset times
-    if (doc["daily"]["sunrise"][0]) {
-      String sunriseStr = doc["daily"]["sunrise"][0].as<String>();
-      sunriseTime = sunriseStr.substring(11, 16); // Extract HH:MM
-    }
-    
-    if (doc["daily"]["sunset"][0]) {
-      String sunsetStr = doc["daily"]["sunset"][0].as<String>();
-      sunsetTime = sunsetStr.substring(11, 16); // Extract HH:MM
-    }
-    
-    weatherDataValid = true;
-    Serial.println("Weather data updated successfully");
-    Serial.print("Sunrise: ");
-    Serial.print(sunriseTime);
-    Serial.print(" Sunset: ");
-    Serial.println(sunsetTime);
-  } else {
-    Serial.print("HTTP error: ");
-    Serial.println(httpCode);
-  }
-  
-  http.end();
-}
+// ################################ Sensors ####################################
 
 void initSensors() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
   
   if (!aht.begin(&Wire)) {
-    Serial.println("AHT init fail");
+    #if LOGGING_ENABLED
+      Serial.println("AHT init fail");
+    #endif
   }
   
   scd4x.begin(Wire);
@@ -110,28 +49,8 @@ void initSensors() {
   scd4x.startPeriodicMeasurement();
 }
 
-void initDisplay() {
-  pinMode(EPD_PWR_PIN, OUTPUT);
-  digitalWrite(EPD_PWR_PIN, HIGH);
-  delay(100);
-  
-  display.init(115200, true, 2, false);
-  // rotate by 90 degrees to landscape
-  display.setRotation(2);
-  display.setTextColor(GxEPD_BLACK);
-}
-
-void connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(500);
-  }
-  
-  if (WiFi.status() == WL_CONNECTED) {
-    Serial.println("WiFi OK");
-  }
+float getDummyPressure() {
+  return 1000.0;
 }
 
 void readSensors() {
@@ -142,23 +61,117 @@ void readSensors() {
   
   tempESP = temperatureRead();
   
-  uint16_t co2Raw;
-  float tempSCD, humSCD;
-  if (scd4x.readMeasurement(co2Raw, tempSCD, humSCD) == 0) {
-    co2 = co2Raw;
+  bool dataReady = false;
+  scd4x.getDataReadyFlag(dataReady);
+  
+  co2 = 0;
+  if (dataReady) {
+    uint16_t co2Raw;
+    float _tempSCD, _humSCD;
+    if (scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD) == 0) {
+      co2 = co2Raw;
+    }
   }
   
   pressure = getDummyPressure();
+}
+
+// ############################### Internet ####################################
+
+void connectWiFi() {
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
-  tempHistory[historyIndex] = tempAir;
-  humidHistory[historyIndex] = humidity;
-  co2History[historyIndex] = co2;
-  historyIndex = (historyIndex + 1) % 24;
+  for (int i = 0; i < 50 && WiFi.status() != WL_CONNECTED; i++) {
+    delay(500);
+  }
+  
+  #if LOGGING_ENABLED
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("WiFi OK");
+    } else {
+      Serial.println("WiFi Failed");
+    }
+  #endif
+}
+
+void fetchWeatherForecast() {
+  if (WiFi.status() != WL_CONNECTED) {
+    #if LOGGING_ENABLED
+      Serial.println("WiFi not connected, skipping weather update");
+    #endif
+    return;
+  }
+  
+  #if LOGGING_ENABLED
+    Serial.println("Fetching weather forecast...");
+  #endif
+  HTTPClient http;
+  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain&daily=sunset,sunrise&forecast_hours="+String(FORECAST_HOURS));
+  
+  int httpCode = http.GET();
+  
+  if (httpCode == 200) {
+    String payload = http.getString();
+    
+    JsonDocument doc;
+    DeserializationError error = deserializeJson(doc, payload);
+    
+    if (error) {
+      #if LOGGING_ENABLED
+        Serial.print("JSON parse error: ");
+        Serial.println(error.c_str());
+      #endif
+      http.end();
+      return;
+    }
+    
+    // Parse hourly temperature and rain
+    JsonArray tempArray = doc["hourly"]["temperature_2m"];
+    JsonArray rainArray = doc["hourly"]["rain"];
+    
+    for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
+      rtc_forecastTemp[i] = tempArray[i];
+      rtc_forecastRain[i] = rainArray[i];
+    }
+    
+    // Parse sunrise and sunset times
+    if (doc["daily"]["sunrise"][0]) {
+      String sunriseStr = doc["daily"]["sunrise"][0].as<String>();
+      String sunriseShort = sunriseStr.substring(11, 16); // Extract HH:MM
+      sunriseShort.toCharArray(rtc_sunriseTimeStr, 6);
+    }
+    if (doc["daily"]["sunset"][0]) {
+      String sunsetStr = doc["daily"]["sunset"][0].as<String>();
+      String sunsetShort = sunsetStr.substring(11, 16); // Extract HH:MM
+      sunsetShort.toCharArray(rtc_sunsetTimeStr, 6);
+    }
+    rtc_weatherDataValid = true;
+    #if LOGGING_ENABLED
+      Serial.println("Weather data updated successfully");
+      Serial.print("Sunrise: ");
+      Serial.print(rtc_sunriseTimeStr);
+      Serial.print(" Sunset: ");
+      Serial.println(rtc_sunsetTimeStr);
+    #endif
+  } else {
+    #if LOGGING_ENABLED
+      Serial.print("HTTP error: ");
+      Serial.println(httpCode);
+    #endif
+  }
+  
+  http.end();
 }
 
 void sendToThingSpeak() {
-  if (WiFi.status() != WL_CONNECTED) return;
-  
+  if (WiFi.status() != WL_CONNECTED){
+    #if LOGGING_ENABLED
+      Serial.println("WiFi not connected, skipping ThingSpeak upload");
+    #endif
+    return;
+  }
+
   String url = "http://api.thingspeak.com/update?api_key=";
   url += THINGSPEAK_API_KEY;
   url += "&field1=" + String(tempAir, 2);
@@ -172,64 +185,70 @@ void sendToThingSpeak() {
   int code = http.GET();
   http.end();
   
-  if (code > 0) Serial.println("Upload OK");
+  #if LOGGING_ENABLED
+    if (code > 0) Serial.println("Upload OK");
+    else Serial.println("Upload failed");
+  #endif
+}
+
+// ################################ Display ####################################
+
+void initDisplay() {
+  pinMode(EPD_PWR_PIN, OUTPUT);
+  digitalWrite(EPD_PWR_PIN, HIGH);
+  delay(100);
+  
+  display.init(115200, true, 2, false);
+  display.setRotation(2); // landscape
+  display.setTextColor(GxEPD_BLACK);
 }
 
 void setup() {
-  Serial.begin(115200);
-  
-  for (int i = 0; i < HISTORY_SIZE; i++) {
-    tempHistory[i] = 0;
-    humidHistory[i] = 0;
-    co2History[i] = 0;
-  }
-  
-  initDisplay();
+  #if LOGGING_ENABLED
+    Serial.begin(115200);
+  #endif
+
+  rtc_bootCount++;
+  rtc_bootsFromLastForecastFetch++;
+
   initSensors();
+  readSensors();
+
   connectWiFi();
-  
-  // Initialize weather forecast arrays
-  for (int i = 0; i < FORECAST_HOURS; i++) {
-    forecastTemp[i] = 0;
-    forecastRain[i] = 0;
-  }
-  
-  // Fetch weather forecast on startup
-  if (WiFi.status() == WL_CONNECTED) {
+  if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
     fetchWeatherForecast();
+    rtc_bootsFromLastForecastFetch = 0;
   }
+
+  initDisplay();
+  updateDisplay(
+    display,
+    tempAir,
+    humidity,
+    co2,
+    pressure,
+    rtc_sunriseTimeStr,
+    rtc_sunsetTimeStr,
+    rtc_forecastTemp,
+    rtc_forecastRain,
+    FORECAST_HOURS,
+    rtc_weatherDataValid
+  );
   
-  delay(5000);
-  lastUpdate = millis() - UPDATE_INTERVAL;
-  lastWeatherUpdate = millis();
+  sendToThingSpeak();
+
+  delay(100);
+
+  #if LOGGING_ENABLED
+    Serial.println("Going to deep sleep...");
+  #endif
+
+  unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
+
+  esp_sleep_enable_timer_wakeup(sleepTimeUs);
+  esp_deep_sleep_start();
 }
 
 void loop() {
-  // Update weather forecast every hour
-  if (millis() - lastWeatherUpdate >= WEATHER_UPDATE_INTERVAL) {
-    lastWeatherUpdate = millis();
-    fetchWeatherForecast();
-  }
-  
-  if (millis() - lastUpdate >= UPDATE_INTERVAL) {
-    lastUpdate = millis();
-    
-    readSensors();
-    updateDisplay(
-      display,
-      tempAir,
-      humidity,
-      co2,
-      pressure,
-      sunriseTime,
-      sunsetTime,
-      forecastTemp,
-      forecastRain,
-      FORECAST_HOURS,
-      weatherDataValid
-    );
-    sendToThingSpeak();
-  }
-  
-  delay(1000);
+  // Not used, all logic in setup for deep sleep cycle
 }
