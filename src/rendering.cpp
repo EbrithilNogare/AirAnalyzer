@@ -86,7 +86,6 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 	minTemp = floor(minTemp);
 	maxTemp = ceil(maxTemp);
 	if (minTemp == maxTemp) { minTemp -= 1; maxTemp += 1; }
-	if (maxRain < 1.0f) maxRain = 1.0f;
 
 	int tempGraphY = weatherY + 28;
 	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
@@ -123,10 +122,10 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 
 	int rainHeight = std::max(12, graphHeight / 3);
 	int rainY = tempGraphY + graphHeight;
-	drawRainColumns(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, maxRain);
+	drawRainColumns(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, max(maxRain, 1.0f));
 
 	display.setFont(&FreeSans18pt7b);
-	display.setCursor(labelX, rainY + 32);
+	display.setCursor(labelX, rainY + 40);
 	display.print(String(static_cast<int>(ceil(maxRain))));
 }
 

@@ -15,12 +15,13 @@
 
 const unsigned long UPDATE_INTERVAL_MS = 30 * 1000;
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
-const int FORECAST_HOURS = 24;
 
 
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
 SensirionI2CScd4x scd4x;
+
+const int FORECAST_HOURS = 24;
 
 float tempAir = 0, humidity = 0, tempESP = 0, co2 = 0, pressure = 1000;
 
@@ -108,7 +109,7 @@ void fetchWeatherForecast() {
     Serial.println("Fetching weather forecast...");
   #endif
   HTTPClient http;
-  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain&daily=sunset,sunrise&forecast_hours="+String(FORECAST_HOURS));
+  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain&daily=sunset,sunrise&forecast_hours=24");
   
   int httpCode = http.GET();
   
