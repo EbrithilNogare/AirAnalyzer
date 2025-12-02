@@ -5,13 +5,14 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <Adafruit_AHTX0.h>
+#include <Adafruit_BMP280.h>
 #include <SensirionI2CScd4x.h>
 #include <GxEPD2_BW.h>
 #include <ArduinoJson.h>
 #include "rendering.h"
 #include <esp_sleep.h>
 
-#define LOGGING_ENABLED false
+#define LOGGING_ENABLED true
 
 const unsigned long UPDATE_INTERVAL_MS = 30 * 1000;
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
@@ -19,6 +20,7 @@ const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
+Adafruit_BMP280 bmp;
 SensirionI2CScd4x scd4x;
 
 const int FORECAST_HOURS = 24;
@@ -38,6 +40,8 @@ RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
 
 void initSensors() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
+  Wire.setClock(100000);  // 100kHz for better compatibility with all sensors
+  delay(10);
   
   if (!aht.begin(&Wire)) {
     #if LOGGING_ENABLED
@@ -45,17 +49,34 @@ void initSensors() {
     #endif
   }
   
+  if (bmp.begin(BMP280_ADDRESS_ALT)) {
+      #if LOGGING_ENABLED
+      Serial.println("BMP280 OK on 0x77");
+      #endif
+
+      bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
+                      Adafruit_BMP280::SAMPLING_X1,  // temperature
+                      Adafruit_BMP280::SAMPLING_X16,  // pressure
+                      Adafruit_BMP280::FILTER_OFF);
+  } else {
+      #if LOGGING_ENABLED
+        Serial.println("BMP280 init fail");
+      #endif
+  }
+  
   scd4x.begin(Wire);
+  delay(10);
   scd4x.stopPeriodicMeasurement();
   delay(500);
   scd4x.startPeriodicMeasurement();
 }
 
-float getDummyPressure() {
-  return 1000.0;
-}
-
 void readSensors() {
+  bmp.takeForcedMeasurement();
+  pressure = bmp.readPressure() / 100.0F;  // Convert Pa to hPa
+  
+  scd4x.setAmbientPressure((uint16_t)pressure);
+  
   sensors_event_t hum, temp;
   aht.getEvent(&hum, &temp);
   tempAir = temp.temperature;
@@ -74,8 +95,6 @@ void readSensors() {
       co2 = co2Raw;
     }
   }
-  
-  pressure = getDummyPressure();
 }
 
 // ############################### Internet ####################################
@@ -215,6 +234,9 @@ void initDisplay() {
 void setup() {
   #if LOGGING_ENABLED
     Serial.begin(115200);
+    while(!Serial) {
+      delay(10);
+    }
   #endif
 
   rtc_bootCount++;
@@ -255,6 +277,13 @@ void setup() {
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 
+
+  #if LOGGING_ENABLED
+    Serial.println("fakeing deep sleep for debug");
+    delay(sleepTimeUs / 1000);
+    sleepTimeUs = 1000ULL; // 1ms deep sleep to allow reset
+  #endif
+    
   esp_sleep_enable_timer_wakeup(sleepTimeUs);
   esp_deep_sleep_start();
 }
