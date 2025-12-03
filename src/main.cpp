@@ -12,9 +12,9 @@
 #include "rendering.h"
 #include <esp_sleep.h>
 
-#define LOGGING_ENABLED true
+#define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 30 * 1000;
+const unsigned long UPDATE_INTERVAL_MS = 120 * 1000;
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
