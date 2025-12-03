@@ -20,12 +20,84 @@ inline void drawDashedVLine(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM039
 		if (segH > 0) display.drawLine(x, yy, x, yy + segH - 1, GxEPD_BLACK);
 	}
 }
+
+const uint8_t ditherPatterns[8][4] = {
+	{0b1111, 0b1111, 0b1111, 0b1111},  // 100% - full
+	{0b1111, 0b0111, 0b1111, 0b1101},  // ~87%
+	{0b1010, 0b1111, 0b1010, 0b1111},  // ~75%
+	{0b1010, 0b0101, 0b1010, 0b0101},  // ~50% - checkerboard
+	{0b1010, 0b0000, 0b0101, 0b0000},  // ~25%
+	{0b1000, 0b0000, 0b0010, 0b0000},  // ~12%
+	{0b0000, 0b0100, 0b0000, 0b0000},  // ~6%
+	{0b0000, 0b0000, 0b0000, 0b0000},  // 0% - empty
+};
+
+inline bool shouldDrawPixel(int x, int y, int ditherLevel) {
+	if (ditherLevel >= 8) return false;
+	if (ditherLevel < 0) ditherLevel = 0;
+	int px = x & 3;  // x % 4
+	int py = y & 3;  // y % 4
+	return (ditherPatterns[ditherLevel][py] >> (3 - px)) & 1;
+}
 }
 
 void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
 					  int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
+
+	// Calculate zero line Y position
+	int zeroY = y + h - static_cast<int>(((0.0f - minVal) / range) * h);
+	bool zeroInRange = (zeroY >= y && zeroY <= y + h);
+
+	// Draw fade trail under/over the temperature line
+	const int fadeDepth = 40;  // Maximum fade distance in pixels
+	const int fadeSteps = 8;   // Number of dither levels
+	
+	for (int i = 0; i < dataSize; i++) {
+		int x1 = x + i * w / dataSize;
+		int x2 = x + (i + 1) * w / dataSize;
+		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
+		
+		// Determine if this point is above or below zero
+		bool aboveZero = data[i] >= 0;
+		
+		for (int px = x1; px < x2; px++) {
+			// Interpolate Y for smoother trail
+			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
+			int nextLineY = lineY;
+			if (i < dataSize - 1) {
+				nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
+			}
+			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
+			
+			if (aboveZero) {
+				// Trail goes downward (from line toward zero or bottom)
+				int trailEnd = zeroInRange ? std::min(zeroY, y + h - 1) : y + h - 1;
+				trailEnd = std::min(trailEnd, currentY + fadeDepth);
+				
+				for (int py = currentY + 3; py <= trailEnd; py++) {  // Start below the line
+					int dist = py - currentY;
+					int ditherLevel = (dist * fadeSteps) / fadeDepth;
+					if (shouldDrawPixel(px, py, ditherLevel)) {
+						display.drawPixel(px, py, GxEPD_BLACK);
+					}
+				}
+			} else {
+				// Trail goes upward (from line toward zero or top)
+				int trailEnd = zeroInRange ? std::max(zeroY, y) : y;
+				trailEnd = std::max(trailEnd, currentY - fadeDepth);
+				
+				for (int py = currentY - 3; py >= trailEnd; py--) {  // Start above the line
+					int dist = currentY - py;
+					int ditherLevel = (dist * fadeSteps) / fadeDepth;
+					if (shouldDrawPixel(px, py, ditherLevel)) {
+						display.drawPixel(px, py, GxEPD_BLACK);
+					}
+				}
+			}
+		}
+	}
 
 	int firstLine = static_cast<int>(floor(minVal / 10.0f)) * 10;
 	for (int t = firstLine; t <= static_cast<int>(ceil(maxVal)); t += 10) {
@@ -82,6 +154,7 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 		if (forecastTemp[i] < minTemp) minTemp = forecastTemp[i];
 		if (forecastTemp[i] > maxTemp) maxTemp = forecastTemp[i];
 		if (forecastRain[i] > maxRain) maxRain = forecastRain[i];
+		// noise fade out
 	}
 	minTemp = floor(minTemp);
 	maxTemp = ceil(maxTemp);
