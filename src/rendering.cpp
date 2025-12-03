@@ -54,7 +54,7 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 	const int fadeDepth = 40;  // Maximum fade distance in pixels
 	const int fadeSteps = 8;   // Number of dither levels
 	
-	for (int i = 0; i < dataSize; i++) {
+	for (int i = 0; i < dataSize - 1; i++) {  // Stop before last point
 		int x1 = x + i * w / dataSize;
 		int x2 = x + (i + 1) * w / dataSize;
 		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
@@ -65,11 +65,11 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 		for (int px = x1; px < x2; px++) {
 			// Interpolate Y for smoother trail
 			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
-			int nextLineY = lineY;
-			if (i < dataSize - 1) {
-				nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
-			}
+			int nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
 			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
+			
+			// Clamp currentY to graph bounds
+			currentY = std::max(y, std::min(y + h - 1, currentY));
 			
 			if (aboveZero) {
 				// Trail goes downward (from line toward zero or bottom)
@@ -105,9 +105,13 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 		int yy = y + h - static_cast<int>(((val - minVal) / range) * h);
 		if (yy < y || yy > y + h) continue;
 		if (t == 0) {
+			// 3px thick line for 0 degrees
+			display.drawLine(x + 1, yy - 1, x + w - 2, yy - 1, GxEPD_BLACK);
 			display.drawLine(x + 1, yy, x + w - 2, yy, GxEPD_BLACK);
+			display.drawLine(x + 1, yy + 1, x + w - 2, yy + 1, GxEPD_BLACK);
 		} else {
-			drawDashedHLine(display, x + 1, x + w - 2, yy);
+			// 1px solid line for other temperatures
+			display.drawLine(x + 1, yy, x + w - 2, yy, GxEPD_BLACK);
 		}
 	}
 
@@ -161,11 +165,16 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 	if (minTemp == maxTemp) { minTemp -= 1; maxTemp += 1; }
 
 	int tempGraphY = weatherY + 28;
+	int rainHeight = std::max(12, graphHeight / 3);
+	int rainY = tempGraphY + graphHeight;
+	
 	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
 
 	// Draw vertical lines and hour labels only at even hours
 	display.setFont(&FreeSans12pt7b);
 	int hourY = weatherY + 18;
+	int lineEndY = rainY + rainHeight;  // Lines extend through rain graph
+	
 	for (int i = 0; i < forecastHours; i++) {
 		int hour = (forecastStartHour + i) % 24;
 		if (hour % 2 != 0) continue; // Only even hours
@@ -178,11 +187,12 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 		display.setCursor(xx - tbw / 2, hourY);
 		display.print(hlabel);
 		
-		// Draw vertical line (thick for 00:00 and 12:00, dashed for others)
+		// Draw solid vertical line (2px thick for 00:00 and 12:00, 1px for others)
 		if (hour == 0 || hour == 12) {
-			display.drawLine(xx, tempGraphY + 1, xx, tempGraphY + graphHeight - 1, GxEPD_BLACK);
+			display.drawLine(xx, tempGraphY + 1, xx, lineEndY - 1, GxEPD_BLACK);
+			display.drawLine(xx + 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
 		} else {
-			drawDashedVLine(display, tempGraphY + 2, tempGraphY + graphHeight - 2, xx);
+			display.drawLine(xx, tempGraphY + 1, xx, lineEndY - 1, GxEPD_BLACK);
 		}
 	}
 
@@ -193,8 +203,6 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 	display.setCursor(labelX, tempGraphY + graphHeight - 14);
 	display.print(String(static_cast<int>(minTemp)));
 
-	int rainHeight = std::max(12, graphHeight / 3);
-	int rainY = tempGraphY + graphHeight;
 	drawRainColumns(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, max(maxRain, 1.0f));
 
 	display.setFont(&FreeSans18pt7b);
