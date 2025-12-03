@@ -189,6 +189,7 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 		
 		// Draw solid vertical line (2px thick for 00:00 and 12:00, 1px for others)
 		if (hour == 0 || hour == 12) {
+			display.drawLine(xx - 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
 			display.drawLine(xx, tempGraphY + 1, xx, lineEndY - 1, GxEPD_BLACK);
 			display.drawLine(xx + 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
 		} else {

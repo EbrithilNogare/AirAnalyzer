@@ -66,6 +66,10 @@ void initSensors() {
   
   scd4x.begin(Wire);
   delay(10);
+}
+
+void restartCO2Measurement() {
+  // Restart periodic measurement for next wake cycle
   scd4x.stopPeriodicMeasurement();
   delay(500);
   scd4x.startPeriodicMeasurement();
@@ -248,6 +252,7 @@ void setup() {
 
   initSensors();
   readSensors();
+  restartCO2Measurement();
 
   connectWiFi();
   if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
@@ -283,7 +288,7 @@ void setup() {
 
 
   #if LOGGING_ENABLED
-    Serial.println("fakeing deep sleep for debug");
+    Serial.println("faking deep sleep for debug");
     delay(sleepTimeUs / 1000);
     sleepTimeUs = 1000ULL; // 1ms deep sleep to allow reset
   #endif
