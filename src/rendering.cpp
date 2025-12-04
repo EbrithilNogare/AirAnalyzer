@@ -6,18 +6,19 @@
 #include "icons/sunset.icon.h"
 #include "icons/co2.icon.h"
 
-namespace {
-inline void drawDashedHLine(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {
+inline void drawDashedHLine(DisplayType& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {
 	for (int xx = x1; xx <= x2; xx += onLen + offLen) {
 		int segW = std::min(onLen, x2 - xx + 1);
-		if (segW > 0) display.drawLine(xx, y, xx + segW - 1, y, GxEPD_BLACK);
+		if (segW > 0)
+			display.drawLine(xx, y, xx + segW - 1, y, GxEPD_BLACK);
 	}
 }
 
-inline void drawDashedVLine(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display, int y1, int y2, int x, int onLen = 3, int offLen = 3) {
+inline void drawDashedVLine(DisplayType& display, int y1, int y2, int x, int onLen = 3, int offLen = 3) {
 	for (int yy = y1; yy <= y2; yy += onLen + offLen) {
 		int segH = std::min(onLen, y2 - yy + 1);
-		if (segH > 0) display.drawLine(x, yy, x, yy + segH - 1, GxEPD_BLACK);
+		if (segH > 0)
+			display.drawLine(x, yy, x, yy + segH - 1, GxEPD_BLACK);
 	}
 }
 
@@ -39,10 +40,8 @@ inline bool shouldDrawPixel(int x, int y, int ditherLevel) {
 	int py = y & 3;  // y % 4
 	return (ditherPatterns[ditherLevel][py] >> (3 - px)) & 1;
 }
-}
 
-void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
-					  int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
+void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
 
@@ -51,7 +50,7 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 	bool zeroInRange = (zeroY >= y && zeroY <= y + h);
 
 	// Draw fade trail under/over the temperature line
-	const int fadeDepth = 40;  // Maximum fade distance in pixels
+	const int fadeDepth = 24;  // Maximum fade distance in pixels
 	const int fadeSteps = 8;   // Number of dither levels
 	
 	for (int i = 0; i < dataSize - 1; i++) {  // Stop before last point
@@ -126,8 +125,7 @@ void drawForecastGraph(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81:
 	}
 }
 
-void drawRainColumns(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
-					int x, int y, int w, int h, const float* data, int dataSize, float maxVal) {
+void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal) {
 	int colWidth = std::max(1, w / dataSize);
 	for (int i = 0; i < dataSize; i++) {
 		float v = data[i];
@@ -135,14 +133,11 @@ void drawRainColumns(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::H
 		int colHeight = static_cast<int>((v / maxVal) * h);
 		if (colHeight < 1) colHeight = 1;
 		int x1 = x + i * colWidth;
-		int y1 = y;
-		display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
+		display.fillRect(x1, y, colWidth - 1, colHeight, GxEPD_BLACK);
 	}
 }
 
-void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
-						const float* forecastTemp, const float* forecastRain, int forecastHours,
-						int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
+void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
 	if (!weatherDataValid) return;
 	int screenW = display.width();
 	int screenH = display.height();
@@ -211,11 +206,8 @@ void drawWeatherForecast(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T8
 	display.print(String(static_cast<int>(ceil(maxRain))));
 }
 
-void updateDisplay(GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT>& display,
-				   float tempAir, float humidity, float co2, float pressure,
-				   const String& sunriseTime, const String& sunsetTime,
-				   const float* forecastTemp, const float* forecastRain, int forecastHours,
-				   int forecastStartHour, bool weatherDataValid) {
+void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime,
+				   const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid) {
 	display.setFullWindow();
 	display.firstPage();
 	do {
