@@ -23,21 +23,21 @@ inline void drawDashedVLine(DisplayType& display, int y1, int y2, int x, int onL
 }
 
 const uint8_t ditherPatterns[8][4] = {
-	{0b1111, 0b1111, 0b1111, 0b1111},  // 100% - full
-	{0b1111, 0b0111, 0b1111, 0b1101},  // ~87%
-	{0b1010, 0b1111, 0b1010, 0b1111},  // ~75%
-	{0b1010, 0b0101, 0b1010, 0b0101},  // ~50% - checkerboard
-	{0b1010, 0b0000, 0b0101, 0b0000},  // ~25%
-	{0b1000, 0b0000, 0b0010, 0b0000},  // ~12%
-	{0b0000, 0b0100, 0b0000, 0b0000},  // ~6%
-	{0b0000, 0b0000, 0b0000, 0b0000},  // 0% - empty
+	{0b1111, 0b1111, 0b1111, 0b1111},
+	{0b1111, 0b0111, 0b1111, 0b1101},
+	{0b1010, 0b1111, 0b1010, 0b1111},
+	{0b1010, 0b0101, 0b1010, 0b0101},
+	{0b1010, 0b0000, 0b0101, 0b0000},
+	{0b1000, 0b0000, 0b0010, 0b0000},
+	{0b0000, 0b0100, 0b0000, 0b0000},
+	{0b0000, 0b0000, 0b0000, 0b0000},
 };
 
 inline bool shouldDrawPixel(int x, int y, int ditherLevel) {
 	if (ditherLevel >= 8) return false;
 	if (ditherLevel < 0) ditherLevel = 0;
-	int px = x & 3;  // x % 4
-	int py = y & 3;  // y % 4
+	int px = x % 4;
+	int py = y % 4;
 	return (ditherPatterns[ditherLevel][py] >> (3 - px)) & 1;
 }
 
@@ -45,37 +45,31 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
 
-	// Calculate zero line Y position
 	int zeroY = y + h - static_cast<int>(((0.0f - minVal) / range) * h);
 	bool zeroInRange = (zeroY >= y && zeroY <= y + h);
 
-	// Draw fade trail under/over the temperature line
-	const int fadeDepth = 24;  // Maximum fade distance in pixels
-	const int fadeSteps = 8;   // Number of dither levels
+	const int fadeDepth = 24;
+	const int fadeSteps = 8;
 	
-	for (int i = 0; i < dataSize - 1; i++) {  // Stop before last point
+	for (int i = 0; i < dataSize - 1; i++) {
 		int x1 = x + i * w / dataSize;
 		int x2 = x + (i + 1) * w / dataSize;
 		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
 		
-		// Determine if this point is above or below zero
 		bool aboveZero = data[i] >= 0;
 		
 		for (int px = x1; px < x2; px++) {
-			// Interpolate Y for smoother trail
 			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
 			int nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
 			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
 			
-			// Clamp currentY to graph bounds
 			currentY = std::max(y, std::min(y + h - 1, currentY));
 			
 			if (aboveZero) {
-				// Trail goes downward (from line toward zero or bottom)
 				int trailEnd = zeroInRange ? std::min(zeroY, y + h - 1) : y + h - 1;
 				trailEnd = std::min(trailEnd, currentY + fadeDepth);
 				
-				for (int py = currentY + 3; py <= trailEnd; py++) {  // Start below the line
+				for (int py = currentY + 3; py <= trailEnd; py++) {
 					int dist = py - currentY;
 					int ditherLevel = (dist * fadeSteps) / fadeDepth;
 					if (shouldDrawPixel(px, py, ditherLevel)) {
@@ -83,11 +77,10 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 					}
 				}
 			} else {
-				// Trail goes upward (from line toward zero or top)
 				int trailEnd = zeroInRange ? std::max(zeroY, y) : y;
 				trailEnd = std::max(trailEnd, currentY - fadeDepth);
 				
-				for (int py = currentY - 3; py >= trailEnd; py--) {  // Start above the line
+				for (int py = currentY - 3; py >= trailEnd; py--) {
 					int dist = currentY - py;
 					int ditherLevel = (dist * fadeSteps) / fadeDepth;
 					if (shouldDrawPixel(px, py, ditherLevel)) {
@@ -104,12 +97,10 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 		int yy = y + h - static_cast<int>(((val - minVal) / range) * h);
 		if (yy < y || yy > y + h) continue;
 		if (t == 0) {
-			// 3px thick line for 0 degrees
 			display.drawLine(x + 1, yy - 1, x + w - 2, yy - 1, GxEPD_BLACK);
 			display.drawLine(x + 1, yy, x + w - 2, yy, GxEPD_BLACK);
 			display.drawLine(x + 1, yy + 1, x + w - 2, yy + 1, GxEPD_BLACK);
 		} else {
-			// 1px solid line for other temperatures
 			display.drawLine(x + 1, yy, x + w - 2, yy, GxEPD_BLACK);
 		}
 	}
@@ -133,7 +124,8 @@ void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const flo
 		int colHeight = static_cast<int>((v / maxVal) * h);
 		if (colHeight < 1) colHeight = 1;
 		int x1 = x + i * colWidth;
-		display.fillRect(x1, y, colWidth - 1, colHeight, GxEPD_BLACK);
+		int y1 = y + h - colHeight;
+		display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
 	}
 }
 
@@ -153,7 +145,6 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 		if (forecastTemp[i] < minTemp) minTemp = forecastTemp[i];
 		if (forecastTemp[i] > maxTemp) maxTemp = forecastTemp[i];
 		if (forecastRain[i] > maxRain) maxRain = forecastRain[i];
-		// noise fade out
 	}
 	minTemp = floor(minTemp);
 	maxTemp = ceil(maxTemp);
@@ -165,24 +156,21 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	
 	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
 
-	// Draw vertical lines and hour labels only at even hours
 	display.setFont(&FreeSans12pt7b);
 	int hourY = weatherY + 18;
-	int lineEndY = rainY + rainHeight;  // Lines extend through rain graph
+	int lineEndY = rainY + rainHeight;
 	
 	for (int i = 0; i < forecastHours; i++) {
 		int hour = (forecastStartHour + i) % 24;
-		if (hour % 2 != 0) continue; // Only even hours
+		if (hour % 2 != 0) continue;
 		int xx = graphX + i * graphWidth / forecastHours;
 		
-		// Draw hour label
 		String hlabel = String(hour);
 		int16_t tbx, tby; uint16_t tbw, tbh;
 		display.getTextBounds(hlabel, xx, hourY, &tbx, &tby, &tbw, &tbh);
 		display.setCursor(xx - tbw / 2, hourY);
 		display.print(hlabel);
 		
-		// Draw solid vertical line (2px thick for 00:00 and 12:00, 1px for others)
 		if (hour == 0 || hour == 12) {
 			display.drawLine(xx - 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
 			display.drawLine(xx, tempGraphY + 1, xx, lineEndY - 1, GxEPD_BLACK);
@@ -193,17 +181,25 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	}
 
 	display.setFont(&FreeSansBold18pt7b);
-	int labelX = graphX + graphWidth - 28;
-	display.setCursor(labelX, tempGraphY + 32);
-	display.print(String(static_cast<int>(maxTemp)));
-	display.setCursor(labelX, tempGraphY + graphHeight - 14);
-	display.print(String(static_cast<int>(minTemp)));
+	int charWidth = 19;
+	
+	String maxTempStr = String(static_cast<int>(maxTemp));
+	int maxLabelX = graphX + graphWidth - (maxTempStr.length() * charWidth);
+	display.setCursor(maxLabelX, tempGraphY + 32);
+	display.print(maxTempStr);
+	
+	String minTempStr = String(static_cast<int>(minTemp));
+	int minLabelX = graphX + graphWidth - (minTempStr.length() * charWidth);
+	display.setCursor(minLabelX, tempGraphY + graphHeight - 14);
+	display.print(minTempStr);
 
 	drawRainColumns(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, max(maxRain, 1.0f));
 
 	display.setFont(&FreeSans18pt7b);
-	display.setCursor(labelX, rainY + 40);
-	display.print(String(static_cast<int>(ceil(maxRain))));
+	String rainStr = String(static_cast<int>(ceil(maxRain)));
+	int rainLabelX = graphX + graphWidth - (rainStr.length() * charWidth);
+	display.setCursor(rainLabelX, rainY + 40);
+	display.print(rainStr);
 }
 
 void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime,

@@ -14,7 +14,7 @@
 
 #define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 120 * 1000;
+const unsigned long UPDATE_INTERVAL_MS = 120 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
@@ -68,11 +68,26 @@ void initSensors() {
   delay(10);
 }
 
-void restartCO2Measurement() {
-  // Restart periodic measurement for next wake cycle
+void initCO2Sensor() {
+  if (rtc_bootCount != 1)
+    return;
+  
+  #if LOGGING_ENABLED
+    Serial.println("First boot: Initializing SCD40 low power mode");
+  #endif
+
   scd4x.stopPeriodicMeasurement();
   delay(500);
-  scd4x.startPeriodicMeasurement();
+
+  uint16_t error = scd4x.startLowPowerPeriodicMeasurement();
+  #if LOGGING_ENABLED
+    if (error == 0) {
+      Serial.println("SCD40 low power mode started successfully");
+    } else {
+      Serial.print("SCD40 start error: ");
+      Serial.println(error);
+    }
+  #endif
 }
 
 void readSensors() {
@@ -251,8 +266,8 @@ void setup() {
   rtc_bootsFromLastForecastFetch++;
 
   initSensors();
+  initCO2Sensor();
   readSensors();
-  restartCO2Measurement();
 
   connectWiFi();
   if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
