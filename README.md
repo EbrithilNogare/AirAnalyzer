@@ -2,8 +2,9 @@
 
 A DIY ESP32-based environmental monitor with an e-paper display!
 
-![Device](graphics/air%20analyzer.png)
-![Internals](graphics/air%20analyzer%20in.png)
+|![Device](graphics/air%20analyzer.png)|![Internals](graphics/air%20analyzer%20in.png)|
+|:--:|:--:|
+|Outside|Inside|
 
 ## What it does
 
