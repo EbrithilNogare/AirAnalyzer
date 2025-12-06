@@ -35,7 +35,7 @@ RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
-RTC_DATA_ATTR uint32_t rtc_weatherFetchTimestamp = 0; // Unix timestamp from weather forecast
+RTC_DATA_ATTR uint32_t rtc_weatherFetchTimestamp = 0;
 
 // ################################ Moon Phase #################################
 
@@ -65,11 +65,6 @@ void initSensors() {
       #if LOGGING_ENABLED
       Serial.println("BMP280 OK on 0x77");
       #endif
-
-      bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
-                      Adafruit_BMP280::SAMPLING_X1,  // temperature
-                      Adafruit_BMP280::SAMPLING_X16,  // pressure
-                      Adafruit_BMP280::FILTER_OFF);
   } else {
       #if LOGGING_ENABLED
         Serial.println("BMP280 init fail");
@@ -103,7 +98,13 @@ void initCO2Sensor() {
 }
 
 void readSensors() {
-  bmp.takeForcedMeasurement();
+  // Configure BMP280 for forced mode before measurement
+  bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
+                  Adafruit_BMP280::SAMPLING_X1,  // temperature
+                  Adafruit_BMP280::SAMPLING_X4,  // pressure (reduced from X16 for power savings)
+                  Adafruit_BMP280::FILTER_OFF);
+  
+  bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
   pressure = bmp.readPressure() / 100.0F;  // Convert Pa to hPa
   
   scd4x.setAmbientPressure((uint16_t)pressure);
@@ -318,11 +319,7 @@ void setup() {
   
   sendToThingSpeak();
 
-  delay(100);
-
-  #if LOGGING_ENABLED
-    Serial.println("Going to deep sleep...");
-  #endif
+  Wire.end();
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 
