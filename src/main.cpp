@@ -119,7 +119,7 @@ void readSensors() {
   bool dataReady = false;
   scd4x.getDataReadyFlag(dataReady);
   
-  co2 = 0;
+  co2 = -1.0f;
   if (dataReady) {
     uint16_t co2Raw;
     float _tempSCD, _humSCD;
