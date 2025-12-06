@@ -35,6 +35,18 @@ RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
+RTC_DATA_ATTR uint32_t rtc_weatherFetchTimestamp = 0; // Unix timestamp from weather forecast
+
+// ################################ Moon Phase #################################
+
+// Returns moon phase as percentage: 0.0 = new moon, 0.5 = full moon, 1.0 = new moon
+float getMoonPhase() {
+  const uint32_t FULL_MOON_REF = 1763614318;
+  const uint32_t LUNAR_CYCLE = 2551443; // 29.53 days in seconds
+  uint32_t currentTime = rtc_weatherFetchTimestamp;
+  uint32_t elapsed = currentTime - FULL_MOON_REF;
+  return (float)(elapsed % LUNAR_CYCLE) / (float)LUNAR_CYCLE;
+}
 
 // ################################ Sensors ####################################
 
@@ -172,10 +184,21 @@ void fetchWeatherForecast() {
     JsonArray snowArray = doc["hourly"]["snowfall"];
     JsonArray timeArray = doc["hourly"]["time"];
     
-    // Extract starting hour from first time entry (format: "2025-12-01T20:00")
     if (timeArray.size() > 0) {
       String firstTime = timeArray[0].as<String>();
       rtc_forecastStartHour = firstTime.substring(11, 13).toInt();
+      
+      int year = firstTime.substring(0, 4).toInt();
+      int month = firstTime.substring(5, 7).toInt();
+      int day = firstTime.substring(8, 10).toInt();
+      int hour = firstTime.substring(11, 13).toInt();
+      
+      struct tm timeinfo = {0};
+      timeinfo.tm_year = year - 1900;
+      timeinfo.tm_mon = month - 1;
+      timeinfo.tm_mday = day;
+      timeinfo.tm_hour = hour;
+      rtc_weatherFetchTimestamp = mktime(&timeinfo);
     }
     
     for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
@@ -276,6 +299,7 @@ void setup() {
   }
 
   initDisplay();
+  float moonPhase = getMoonPhase();
   updateDisplay(
     display,
     tempAir,
@@ -288,7 +312,8 @@ void setup() {
     rtc_forecastRain,
     FORECAST_HOURS,
     rtc_forecastStartHour,
-    rtc_weatherDataValid
+    rtc_weatherDataValid,
+    moonPhase
   );
   
   sendToThingSpeak();

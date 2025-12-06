@@ -5,6 +5,7 @@
 #include "icons/sunrise.icon.h"
 #include "icons/sunset.icon.h"
 #include "icons/co2.icon.h"
+#include "icons/moon.icon.h"
 
 inline void drawDashedHLine(DisplayType& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {
 	for (int xx = x1; xx <= x2; xx += onLen + offLen) {
@@ -203,7 +204,7 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 }
 
 void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime,
-				   const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid) {
+				   const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase) {
 	display.setFullWindow();
 	display.firstPage();
 	do {
@@ -215,22 +216,24 @@ void updateDisplay(DisplayType& display, float tempAir, float humidity, float co
 		int bottomH = std::max(64, screenH / 5);
 		int bottomY = screenH - bottomH - 16;
 
-		int icons = 6;
-		int iconSize = 64;
+		int icons = 7;
+		int iconSize = 56;
 		int gap = (screenW - icons * iconSize) / (icons + 1);
 		int iconY = bottomY + 2;
 		display.setFont(&FreeSans18pt7b);
+		
 		for (int i = 0; i < icons; i++) {
 			int ix = gap + i * (iconSize + gap);
-			int valY = iconY + iconSize + 20;
+			int valY = iconY + iconSize + 18;
 			String v;
 			switch (i) {
 				case 0: v = String(tempAir, 1) + "C"; break;
 				case 1: v = String(static_cast<int>(humidity)) + "%"; break;
 				case 2: v = sunriseTime; break;
-				case 3: v = sunsetTime; break;
-				case 4: v = String(static_cast<int>(co2)); break;
-				case 5: v = String(static_cast<int>(pressure)); break;
+				case 3: v = " "; break;
+				case 4: v = sunsetTime; break;
+				case 5: v = String(static_cast<int>(co2)); break;
+				case 6: v = String(static_cast<int>(pressure)); break;
 			}
 			display.setFont(&FreeSansBold18pt7b);
 			int16_t tbx, tby; uint16_t tbw, tbh;
@@ -247,9 +250,14 @@ void updateDisplay(DisplayType& display, float tempAir, float humidity, float co
 				case 0: display.drawBitmap(iconDrawX, iconDrawY, temp_icon_bits, iconW, iconH, GxEPD_BLACK); break;
 				case 1: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_humidity, iconW, iconH, GxEPD_BLACK); break;
 				case 2: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_sunrise, iconW, iconH, GxEPD_BLACK); break;
-				case 3: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_sunset, iconW, iconH, GxEPD_BLACK); break;
-				case 4: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_co2, iconW, iconH, GxEPD_BLACK); break;
-				case 5: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_pressure, iconW, iconH, GxEPD_BLACK); break;
+				case 3: {
+					int moonIconIndex = static_cast<int>(moonPhase * 24.0f) % 24;
+					display.drawBitmap(iconDrawX, iconDrawY+25, epd_bitmap_allArray[moonIconIndex], iconW, iconH, GxEPD_BLACK);
+					break;
+				}
+				case 4: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_sunset, iconW, iconH, GxEPD_BLACK); break;
+				case 5: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_co2, iconW, iconH, GxEPD_BLACK); break;
+				case 6: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_pressure, iconW, iconH, GxEPD_BLACK); break;
 			}
 		}
 	} while (display.nextPage());
