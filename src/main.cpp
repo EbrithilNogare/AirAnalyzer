@@ -25,7 +25,8 @@ SensirionI2CScd4x scd4x;
 
 const int FORECAST_HOURS = 24;
 
-float tempAir = 0, humidity = 0, tempESP = 0, co2 = 0, pressure = 1000;
+float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0;
+float co2 = -1; // -4=first reading; -3=start failed; -1=reading failed
 
 RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
 RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
@@ -73,6 +74,10 @@ void initSensors() {
   
   scd4x.begin(Wire);
   delay(10);
+
+  analogReadResolution(12);
+  analogSetAttenuation(ADC_11db);
+  pinMode(POWER_SENSING_PIN, INPUT);
 }
 
 void initCO2Sensor() {
@@ -87,14 +92,17 @@ void initCO2Sensor() {
   delay(500);
 
   uint16_t error = scd4x.startLowPowerPeriodicMeasurement();
-  #if LOGGING_ENABLED
-    if (error == 0) {
-      Serial.println("SCD40 low power mode started successfully");
+  if (error == 0) {
+      #if LOGGING_ENABLED
+        Serial.println("SCD40 low power mode started successfully");
+      #endif
     } else {
-      Serial.print("SCD40 start error: ");
-      Serial.println(error);
+      co2 = -3.0f;
+      #if LOGGING_ENABLED
+        Serial.print("SCD40 start error: ");
+        Serial.println(error);
+      #endif
     }
-  #endif
 }
 
 void readSensors() {
@@ -120,8 +128,10 @@ void readSensors() {
   bool dataReady = false;
   scd4x.getDataReadyFlag(dataReady);
   
-  co2 = -1.0f;
-  if (dataReady) {
+  if(co2 == 0 )
+    co2 = rtc_bootCount == 1 ? -4.0f : -1.0f;
+  
+    if (dataReady) {
     uint16_t co2Raw;
     float _tempSCD, _humSCD;
     if (scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD) == 0) {
@@ -133,6 +143,12 @@ void readSensors() {
   if(co2 > 10000) co2 = -3.0f;
   if(humidity < 0 || humidity > 100) humidity = -3.0f;
   if(tempAir < -40 || tempAir > 85) tempAir = -3.0f;
+  
+  uint32_t batteryVoltageSum = 0;
+  for (int i = 0; i < BATTERY_AVERAGE_SAMPLES; i++) {
+    batteryVoltageSum += analogReadMilliVolts(POWER_SENSING_PIN);
+  }
+  batteryVoltage = (batteryVoltageSum / static_cast<float>(BATTERY_AVERAGE_SAMPLES)) * VOLTAGE_DIVIDER_RATIO / 1000.0;
 }
 
 // ############################### Internet ####################################
@@ -260,6 +276,7 @@ void sendToThingSpeak() {
   url += "&field3=" + String(humidity, 2);
   url += "&field4=" + String(co2, 0);
   url += "&field5=" + String(pressure, 0);
+  url += "&field6=" + String(batteryVoltage, 4);
   
   HTTPClient http;
   http.begin(url);
