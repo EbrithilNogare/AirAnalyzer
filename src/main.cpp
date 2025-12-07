@@ -107,7 +107,8 @@ void readSensors() {
   bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
   pressure = bmp.readPressure() / 100.0F;  // Convert Pa to hPa
   
-  scd4x.setAmbientPressure((uint16_t)pressure);
+  if(pressure < 5000 && pressure > 300)
+    scd4x.setAmbientPressure((uint16_t)pressure);
   
   sensors_event_t hum, temp;
   aht.getEvent(&hum, &temp);
@@ -127,6 +128,11 @@ void readSensors() {
       co2 = co2Raw;
     }
   }
+
+  if(pressure > 5000 || pressure < 300) pressure = -3.0f;
+  if(co2 > 10000) co2 = -3.0f;
+  if(humidity < 0 || humidity > 100) humidity = -3.0f;
+  if(tempAir < -40 || tempAir > 85) tempAir = -3.0f;
 }
 
 // ############################### Internet ####################################
@@ -252,8 +258,8 @@ void sendToThingSpeak() {
   url += "&field1=" + String(tempAir, 2);
   url += "&field2=" + String(tempESP, 2);
   url += "&field3=" + String(humidity, 2);
-  url += "&field4=" + String((int)co2);
-  url += "&field5=" + String((int)pressure);
+  url += "&field4=" + String(co2, 0);
+  url += "&field5=" + String(pressure, 0);
   
   HTTPClient http;
   http.begin(url);

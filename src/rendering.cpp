@@ -228,12 +228,12 @@ void updateDisplay(DisplayType& display, float tempAir, float humidity, float co
 			String v;
 			switch (i) {
 				case 0: v = String(tempAir, 1) + "C"; break;
-				case 1: v = String(static_cast<int>(humidity)) + "%"; break;
+				case 1: v = String(humidity, 0) + "%"; break;
 				case 2: v = sunriseTime; break;
 				case 3: v = " "; break;
 				case 4: v = sunsetTime; break;
-				case 5: v = String(static_cast<int>(co2)); break;
-				case 6: v = String(static_cast<int>(pressure)); break;
+				case 5: v = String(co2,0); break;
+				case 6: v = String(pressure,0); break;
 			}
 			display.setFont(&FreeSansBold18pt7b);
 			int16_t tbx, tby; uint16_t tbw, tbh;
