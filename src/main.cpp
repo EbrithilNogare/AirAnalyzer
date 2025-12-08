@@ -182,7 +182,7 @@ void fetchWeatherForecast() {
     Serial.println("Fetching weather forecast...");
   #endif
   HTTPClient http;
-  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain,snowfall&daily=sunset,sunrise&forecast_hours=24");
+  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
   
   int httpCode = http.GET();
   
