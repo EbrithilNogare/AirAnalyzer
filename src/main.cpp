@@ -21,7 +21,7 @@ const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 DisplayType display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
 Adafruit_AHTX0 aht;
 Adafruit_BMP280 bmp;
-SensirionI2CScd4x scd4x;
+SensirionI2cScd4x scd4x;
 
 const int FORECAST_HOURS = 24;
 
@@ -52,9 +52,8 @@ float getMoonPhase() {
 // ################################ Sensors ####################################
 
 void initSensors() {
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN);
-  Wire.setClock(100000);  // 100kHz for better compatibility with all sensors
-  delay(10);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
+  delay(1);
   
   if (!aht.begin(&Wire)) {
     #if LOGGING_ENABLED
@@ -72,8 +71,8 @@ void initSensors() {
       #endif
   }
   
-  scd4x.begin(Wire);
-  delay(10);
+  scd4x.begin(Wire, SCD40_I2C_ADDR_62);
+  delay(30);
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
@@ -91,7 +90,7 @@ void initCO2Sensor() {
   scd4x.stopPeriodicMeasurement();
   delay(500);
 
-  uint16_t error = scd4x.startLowPowerPeriodicMeasurement();
+  uint16_t error = scd4x.startPeriodicMeasurement();
   if (error == 0) {
       #if LOGGING_ENABLED
         Serial.println("SCD40 low power mode started successfully");
@@ -105,7 +104,7 @@ void initCO2Sensor() {
     }
 }
 
-void readSensors() {
+void readSensorBMP(){
   // Configure BMP280 for forced mode before measurement
   bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
                   Adafruit_BMP280::SAMPLING_X1,  // temperature
@@ -117,38 +116,52 @@ void readSensors() {
   
   if(pressure < 5000 && pressure > 300)
     scd4x.setAmbientPressure((uint16_t)pressure);
-  
+
+  if(pressure > 5000 || pressure < 300) pressure = -3.0f;
+}
+
+void readSensorAHT(){
   sensors_event_t hum, temp;
   aht.getEvent(&hum, &temp);
   tempAir = temp.temperature;
   humidity = hum.relative_humidity;
-  
-  tempESP = temperatureRead();
-  
+
+  if(humidity < 0 || humidity > 100) humidity = -3.0f;
+  if(tempAir < -40 || tempAir > 85) tempAir = -3.0f;
+}
+
+void readSensorSCD(){
   bool dataReady = false;
-  scd4x.getDataReadyFlag(dataReady);
+  int error = scd4x.getDataReadyStatus(dataReady);
   
-  if(co2 == 0 )
-    co2 = rtc_bootCount == 1 ? -4.0f : -1.0f;
-  
-    if (dataReady) {
+  if (dataReady) {
     uint16_t co2Raw;
     float _tempSCD, _humSCD;
-    if (scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD) == 0) {
+    int error = scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
+    if (error == 0) {
       co2 = co2Raw;
+    } else {
+      co2 = -error;
     }
   }
 
-  if(pressure > 5000 || pressure < 300) pressure = -3.0f;
   if(co2 > 10000) co2 = -3.0f;
-  if(humidity < 0 || humidity > 100) humidity = -3.0f;
-  if(tempAir < -40 || tempAir > 85) tempAir = -3.0f;
-  
+}
+
+void readSensorBatteryVoltage(){
   uint32_t batteryVoltageSum = 0;
   for (int i = 0; i < BATTERY_AVERAGE_SAMPLES; i++) {
     batteryVoltageSum += analogReadMilliVolts(POWER_SENSING_PIN);
   }
   batteryVoltage = (batteryVoltageSum / static_cast<float>(BATTERY_AVERAGE_SAMPLES)) * VOLTAGE_DIVIDER_RATIO / 1000.0;
+}
+
+void readSensors() {
+  readSensorBMP();
+  readSensorAHT();
+  readSensorSCD();
+  readSensorBatteryVoltage();
+  tempESP = temperatureRead();
 }
 
 // ############################### Internet ####################################
@@ -349,8 +362,10 @@ void setup() {
 
   #if LOGGING_ENABLED
     Serial.println("faking deep sleep for debug");
+    delay(10);
+    Serial.end();
     delay(sleepTimeUs / 1000);
-    sleepTimeUs = 1000ULL; // 1ms deep sleep to allow reset
+    sleepTimeUs = 100000ULL; // 100ms deep sleep to allow reset
   #endif
     
   esp_sleep_enable_timer_wakeup(sleepTimeUs);
