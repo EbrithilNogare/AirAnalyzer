@@ -169,6 +169,8 @@ void readSensors() {
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_17dBm);
+  WiFi.setSleep(WIFI_PS_MIN_MODEM);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   for (int i = 0; i < 100 && WiFi.status() != WL_CONNECTED; i++) {
