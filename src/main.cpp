@@ -79,31 +79,6 @@ void initSensors() {
   pinMode(POWER_SENSING_PIN, INPUT);
 }
 
-void initCO2Sensor() {
-  if (rtc_bootCount != 1)
-    return;
-  
-  #if LOGGING_ENABLED
-    Serial.println("First boot: Initializing SCD40 low power mode");
-  #endif
-
-  scd4x.stopPeriodicMeasurement();
-  delay(500);
-
-  uint16_t error = scd4x.startPeriodicMeasurement();
-  if (error == 0) {
-      #if LOGGING_ENABLED
-        Serial.println("SCD40 low power mode started successfully");
-      #endif
-    } else {
-      co2 = -3.0f;
-      #if LOGGING_ENABLED
-        Serial.print("SCD40 start error: ");
-        Serial.println(error);
-      #endif
-    }
-}
-
 void readSensorBMP(){
   // Configure BMP280 for forced mode before measurement
   bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
@@ -131,19 +106,42 @@ void readSensorAHT(){
 }
 
 void readSensorSCD(){
+  #if LOGGING_ENABLED
+    Serial.println("Initializing SCD40");
+  #endif
+
+  uint16_t error = scd4x.startPeriodicMeasurement();
+  if (error == 0) {
+    #if LOGGING_ENABLED
+      Serial.println("SCD40 low power mode started successfully");
+    #endif
+  } else {
+    #if LOGGING_ENABLED
+      Serial.print("SCD40 start error: ");
+      Serial.println(error);
+    #endif
+  }
+  uint16_t co2Raw;
+  float _tempSCD, _humSCD;
+
+  scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
+  delay(5050); // Wait before first read
+
   bool dataReady = false;
-  int error = scd4x.getDataReadyStatus(dataReady);
+  scd4x.getDataReadyStatus(dataReady);
   
   if (dataReady) {
-    uint16_t co2Raw;
-    float _tempSCD, _humSCD;
     int error = scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
     if (error == 0) {
       co2 = co2Raw;
     } else {
       co2 = -error;
     }
+  } else {
+    co2 = -1.0f;
   }
+
+  scd4x.stopPeriodicMeasurement();
 
   if(co2 > 10000) co2 = -3.0f;
 }
@@ -198,7 +196,6 @@ void fetchWeatherForecast() {
   http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
   
   int httpCode = http.GET();
-  
   if (httpCode == 200) {
     String payload = http.getString();
     
@@ -282,7 +279,9 @@ void sendToThingSpeak() {
     return;
   }
 
-  String url = "http://api.thingspeak.com/update?api_key=";
+  String url;
+  url.reserve(256);
+  url += "http://api.thingspeak.com/update?api_key=";
   url += THINGSPEAK_API_KEY;
   url += "&field1=" + String(tempAir, 2);
   url += "&field2=" + String(tempESP, 2);
@@ -326,7 +325,6 @@ void setup() {
   rtc_bootsFromLastForecastFetch++;
 
   initSensors();
-  initCO2Sensor();
   readSensors();
 
   connectWiFi();
@@ -355,6 +353,9 @@ void setup() {
   
   sendToThingSpeak();
 
+  delay(4000);
+
+  display.hibernate();
   Wire.end();
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
