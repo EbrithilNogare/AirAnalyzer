@@ -14,7 +14,7 @@
 
 #define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 120 * 1000; // because of scd40 it must be > 30s
+const unsigned long UPDATE_INTERVAL_MS = 300 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
@@ -25,8 +25,7 @@ SensirionI2cScd4x scd4x;
 
 const int FORECAST_HOURS = 24;
 
-float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0;
-float co2 = -1; // -4=first reading; -3=start failed; -1=reading failed
+float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0, co2 = 0, moonPhase = 0;
 
 RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
 RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
@@ -41,12 +40,12 @@ RTC_DATA_ATTR uint32_t rtc_weatherFetchTimestamp = 0;
 // ################################ Moon Phase #################################
 
 // Returns moon phase as percentage: 0.0 = new moon, 0.5 = full moon, 1.0 = new moon
-float getMoonPhase() {
+void getMoonPhase() {
   const uint32_t FULL_MOON_REF = 1763614318;
   const uint32_t LUNAR_CYCLE = 2551443; // 29.53 days in seconds
   uint32_t currentTime = rtc_weatherFetchTimestamp;
   uint32_t elapsed = currentTime - FULL_MOON_REF;
-  return (float)(elapsed % LUNAR_CYCLE) / (float)LUNAR_CYCLE;
+  moonPhase = (float)(elapsed % LUNAR_CYCLE) / (float)LUNAR_CYCLE;
 }
 
 // ################################ Sensors ####################################
@@ -172,8 +171,8 @@ void connectWiFi() {
   WiFi.mode(WIFI_STA);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
-  for (int i = 0; i < 20 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(500);
+  for (int i = 0; i < 100 && WiFi.status() != WL_CONNECTED; i++) {
+    delay(100);
   }
   
   #if LOGGING_ENABLED
@@ -296,6 +295,7 @@ void sendToThingSpeak() {
   
   HTTPClient http;
   http.begin(url);
+  http.setTimeout(50); // We don't need response, just send data quickly
   int code = http.GET();
   http.end();
   
@@ -307,11 +307,12 @@ void sendToThingSpeak() {
 
 // ################################ Display ####################################
 
-void initDisplay() {
+void initDisplay1() {
   pinMode(EPD_PWR_PIN, OUTPUT);
   digitalWrite(EPD_PWR_PIN, HIGH);
-  delay(100);
-  
+}
+
+void initDisplay2() {
   display.init(115200, true, 2, false);
   display.setRotation(2); // landscape
   display.setTextColor(GxEPD_BLACK);
@@ -334,15 +335,16 @@ void setup() {
 
   initSensors();
   readSensors();
-
+  initDisplay1(); 
   connectWiFi();
+  
   if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
     fetchWeatherForecast();
     rtc_bootsFromLastForecastFetch = 0;
   }
 
-  initDisplay();
-  float moonPhase = getMoonPhase();
+  initDisplay2();
+  getMoonPhase();
   updateDisplay(
     display,
     tempAir,
@@ -360,6 +362,8 @@ void setup() {
   );
   
   sendToThingSpeak();
+
+  WiFi.disconnect(true);
 
   #if LOGGING_ENABLED
     delay(4000);
