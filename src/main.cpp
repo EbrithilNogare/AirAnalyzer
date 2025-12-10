@@ -125,8 +125,12 @@ void readSensorSCD(){
   float _tempSCD, _humSCD;
 
   scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
-  delay(5050); // Wait before first read
-
+  #if LOGGING_ENABLED
+    delay(5050);
+  #else  
+    esp_sleep_enable_timer_wakeup(5050000); // ms
+    esp_light_sleep_start();
+  #endif
   bool dataReady = false;
   scd4x.getDataReadyStatus(dataReady);
   
@@ -324,6 +328,10 @@ void setup() {
   rtc_bootCount++;
   rtc_bootsFromLastForecastFetch++;
 
+  if(rtc_bootCount == 1) {
+    delay(10000); // Wait for possible upload
+  }
+
   initSensors();
   readSensors();
 
@@ -353,7 +361,12 @@ void setup() {
   
   sendToThingSpeak();
 
-  delay(4000);
+  #if LOGGING_ENABLED
+    delay(4000);
+  #else  
+    esp_sleep_enable_timer_wakeup(4000000); // ms
+    esp_light_sleep_start();
+  #endif
 
   display.hibernate();
   Wire.end();
