@@ -203,9 +203,22 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	display.print(rainStr);
 }
 
-void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime,
-				   const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase) {
-	display.setFullWindow();
+void updateDisplay(
+		DisplayType& display,
+		float tempAir,
+		float humidity,
+		float co2,
+		float pressure,
+		const String& sunriseTime,
+		const String& sunsetTime,
+		const float* forecastTemp,
+		const float* forecastRain,
+		int forecastHours,
+		int forecastStartHour,
+		bool weatherDataValid,
+		float moonPhase
+	) {
+	display.setPartialWindow(0, 0, display.width(), display.height());
 	display.firstPage();
 	do {
 		display.fillScreen(GxEPD_WHITE);

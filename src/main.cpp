@@ -368,14 +368,13 @@ void setup() {
   WiFi.disconnect(true);
 
   #if LOGGING_ENABLED
-    delay(4000);
+    delay(2800);
   #else  
-    esp_sleep_enable_timer_wakeup(4000000); // ms
+    esp_sleep_enable_timer_wakeup(2800000); // ms
     esp_light_sleep_start();
   #endif
 
   display.powerOff();
-  delay(200);
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 
