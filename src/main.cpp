@@ -14,7 +14,7 @@
 
 #define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 300 * 1000; // because of scd40 it must be > 30s
+const unsigned long UPDATE_INTERVAL_MS = 180 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
@@ -125,9 +125,9 @@ void readSensorSCD(){
 
   scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
   #if LOGGING_ENABLED
-    delay(5050);
+    delay(5100);
   #else  
-    esp_sleep_enable_timer_wakeup(5050000); // ms
+    esp_sleep_enable_timer_wakeup(5100000); // ms
     esp_light_sleep_start();
   #endif
   bool dataReady = false;
@@ -158,18 +158,18 @@ void readSensorBatteryVoltage(){
 }
 
 void readSensors() {
+  readSensorBatteryVoltage();
+  tempESP = temperatureRead();
   readSensorBMP();
   readSensorAHT();
   readSensorSCD();
-  readSensorBatteryVoltage();
-  tempESP = temperatureRead();
 }
 
 // ############################### Internet ####################################
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_17dBm);
+  // WiFi.setTxPower(WIFI_POWER_17dBm);
   WiFi.setSleep(WIFI_PS_MIN_MODEM);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
@@ -297,7 +297,7 @@ void sendToThingSpeak() {
   
   HTTPClient http;
   http.begin(url);
-  http.setTimeout(50); // We don't need response, just send data quickly
+  http.setTimeout(100); // We don't need response, just send data quickly
   int code = http.GET();
   http.end();
   
@@ -374,8 +374,8 @@ void setup() {
     esp_light_sleep_start();
   #endif
 
-  display.hibernate();
-  Wire.end();
+  display.powerOff();
+  delay(200);
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 

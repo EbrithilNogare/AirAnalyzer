@@ -18,7 +18,7 @@
 #define I2C_SDA_PIN    6  // I2C SDA
 #define I2C_SCL_PIN    7  // I2C SCL
 
-#define BATTERY_AVERAGE_SAMPLES 8  // Number of samples to average for battery voltage reading
+#define BATTERY_AVERAGE_SAMPLES 64  // Number of samples to average for battery voltage reading
 #define VOLTAGE_DIVIDER_RATIO 1.983f // Voltage divider ratio for battery voltage measurement
 
 #endif
