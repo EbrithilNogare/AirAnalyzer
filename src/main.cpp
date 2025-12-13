@@ -12,9 +12,9 @@
 #include "rendering.h"
 #include <esp_sleep.h>
 
-#define LOGGING_ENABLED true
+#define LOGGING_ENABLED false
 
-const unsigned long UPDATE_INTERVAL_MS = 30 * 1000; // because of scd40 it must be > 30s
+const unsigned long UPDATE_INTERVAL_MS = 300 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
@@ -112,7 +112,7 @@ void readSensorSCD(){
   uint16_t error = scd4x.startPeriodicMeasurement();
   if (error == 0) {
     #if LOGGING_ENABLED
-      Serial.println("SCD40 low power mode started successfully");
+      Serial.println("SCD40 started successfully");
     #endif
   } else {
     #if LOGGING_ENABLED
@@ -169,12 +169,12 @@ void readSensors() {
 
 void connectWiFi() {
   WiFi.mode(WIFI_STA);
-  // WiFi.setTxPower(WIFI_POWER_17dBm);
-  WiFi.setSleep(WIFI_PS_MIN_MODEM);
+  WiFi.setTxPower(WIFI_POWER_5dBm);
+  WiFi.setSleep(WIFI_PS_NONE);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   
   for (int i = 0; i < 100 && WiFi.status() != WL_CONNECTED; i++) {
-    delay(100);
+    delay(50);
   }
   
   #if LOGGING_ENABLED
@@ -315,21 +315,21 @@ void initDisplay1() {
 }
 
 void initDisplay2() {
-  display.init(115200, true, 2, false);
+  display.init(115200, false, 2, false);  // Changed 2nd param to false to skip initial full refresh
   display.setRotation(2); // landscape
   display.setTextColor(GxEPD_BLACK);
 }
 
 void setup() {
+  rtc_bootCount++;
+  rtc_bootsFromLastForecastFetch++;
+
   #if LOGGING_ENABLED
     Serial.begin(115200);
     while(!Serial) {
       delay(10);
     }
   #endif
-
-  rtc_bootCount++;
-  rtc_bootsFromLastForecastFetch++;
 
   if(rtc_bootCount == 1) {
     delay(10000); // Wait for possible upload
@@ -346,6 +346,20 @@ void setup() {
   }
 
   initDisplay2();
+
+  if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
+    // Quick refresh display to pure white to avoid ghosting
+    display.fillScreen(GxEPD_WHITE);
+    display.nextPage();
+    
+  #if LOGGING_ENABLED
+    delay(100);
+  #else  
+    esp_sleep_enable_timer_wakeup(100000); // ms
+    esp_light_sleep_start();
+  #endif
+  }
+
   getMoonPhase();
   updateDisplay(
     display,
@@ -368,13 +382,14 @@ void setup() {
   WiFi.disconnect(true);
 
   #if LOGGING_ENABLED
-    delay(2800);
+    delay(550);
   #else  
-    esp_sleep_enable_timer_wakeup(2800000); // ms
+    esp_sleep_enable_timer_wakeup(550000); // ms
     esp_light_sleep_start();
   #endif
 
   display.powerOff();
+  digitalWrite(EPD_PWR_PIN, LOW);
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 
@@ -384,7 +399,7 @@ void setup() {
     delay(10);
     Serial.end();
     delay(sleepTimeUs / 1000);
-    sleepTimeUs = 100000ULL; // 100ms deep sleep to allow reset
+    ESP.restart();
   #endif
     
   esp_sleep_enable_timer_wakeup(sleepTimeUs);
