@@ -60,11 +60,7 @@ void initSensors() {
     #endif
   }
   
-  if (bmp.begin(BMP280_ADDRESS_ALT)) {
-      #if LOGGING_ENABLED
-      Serial.println("BMP280 OK on 0x77");
-      #endif
-  } else {
+  if (!bmp.begin(BMP280_ADDRESS_ALT)) {
       #if LOGGING_ENABLED
         Serial.println("BMP280 init fail");
       #endif
@@ -86,7 +82,7 @@ void readSensorBMP(){
                   Adafruit_BMP280::FILTER_OFF);
   
   bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
-  pressure = bmp.readPressure() / 100.0F;  // Convert Pa to hPa
+  pressure = bmp.readPressure() / 100.0f;  // Convert Pa to hPa
   
   if(pressure < 5000 && pressure > 300)
     scd4x.setAmbientPressure((uint16_t)pressure * 100);
@@ -120,20 +116,22 @@ void readSensorSCD(){
       Serial.println(error);
     #endif
   }
-  uint16_t co2Raw;
-  float _tempSCD, _humSCD;
 
-  scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
+  uint16_t _co2Raw;
+  float _tempSCD, _humSCD;
+  
+  scd4x.readMeasurement(_co2Raw, _tempSCD, _humSCD);
   #if LOGGING_ENABLED
-    delay(5000);
+  delay(5000);
   #else  
-    esp_sleep_enable_timer_wakeup(5000000); // ms
-    esp_light_sleep_start();
+  esp_sleep_enable_timer_wakeup(5000000); // ms
+  esp_light_sleep_start();
   #endif
   bool dataReady = false;
   scd4x.getDataReadyStatus(dataReady);
   
   if (dataReady) {
+    uint16_t co2Raw;
     int error = scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
     if (error == 0) {
       co2 = co2Raw;
@@ -172,8 +170,10 @@ void connectWiFi() {
   WiFi.setTxPower(WIFI_POWER_5dBm);
   WiFi.setSleep(WIFI_PS_NONE);
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  
-  for (int i = 0; i < 100 && WiFi.status() != WL_CONNECTED; i++) {
+}
+
+void waitForWiFi(int timeoutMs = 10000) {
+  for (int i = 0; i < timeoutMs && WiFi.status() != WL_CONNECTED; i+=50){
     delay(50);
   }
   
@@ -341,6 +341,7 @@ void setup() {
   connectWiFi();
   
   if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
+    waitForWiFi();
     fetchWeatherForecast();
     rtc_bootsFromLastForecastFetch = 0;
   }
@@ -377,6 +378,7 @@ void setup() {
     moonPhase
   );
   
+  waitForWiFi();
   sendToThingSpeak();
 
   WiFi.disconnect(true);
