@@ -12,9 +12,9 @@
 #include "rendering.h"
 #include <esp_sleep.h>
 
-#define LOGGING_ENABLED false
+#define LOGGING_ENABLED true
 
-const unsigned long UPDATE_INTERVAL_MS = 180 * 1000; // because of scd40 it must be > 30s
+const unsigned long UPDATE_INTERVAL_MS = 30 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
@@ -89,7 +89,7 @@ void readSensorBMP(){
   pressure = bmp.readPressure() / 100.0F;  // Convert Pa to hPa
   
   if(pressure < 5000 && pressure > 300)
-    scd4x.setAmbientPressure((uint16_t)pressure);
+    scd4x.setAmbientPressure((uint16_t)pressure * 100);
 
   if(pressure > 5000 || pressure < 300) pressure = -3.0f;
 }
@@ -125,9 +125,9 @@ void readSensorSCD(){
 
   scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
   #if LOGGING_ENABLED
-    delay(5100);
+    delay(5000);
   #else  
-    esp_sleep_enable_timer_wakeup(5100000); // ms
+    esp_sleep_enable_timer_wakeup(5000000); // ms
     esp_light_sleep_start();
   #endif
   bool dataReady = false;

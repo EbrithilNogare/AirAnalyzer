@@ -9,6 +9,8 @@
         "-m",
         "platformio",
         "run",
+        "--environment",
+        "main",
         "--target",
         "upload",
         "--target",
@@ -18,6 +20,33 @@
         "kind": "build",
         "isDefault": true
       },
+      "presentation": {
+        "echo": true,
+        "reveal": "always",
+        "focus": true,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "problemMatcher": ["$platformio"],
+      "isBackground": false
+    },
+    {
+      "label": "PlatformIO: Upload and run test",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "-m",
+        "platformio",
+        "run",
+        "--environment",
+        "test",
+        "--target",
+        "upload",
+        "--target",
+        "monitor"
+      ],
+      "group": "build",
       "presentation": {
         "echo": true,
         "reveal": "always",
