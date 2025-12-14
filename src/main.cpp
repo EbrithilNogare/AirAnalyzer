@@ -335,12 +335,15 @@ void setup() {
     delay(10000); // Wait for possible upload
   }
 
+  bool largeUpdate = rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS;
+
+
   initSensors();
   readSensors();
   initDisplay1(); 
   connectWiFi();
   
-  if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
+  if (largeUpdate) {
     waitForWiFi();
     fetchWeatherForecast();
     rtc_bootsFromLastForecastFetch = 0;
@@ -348,17 +351,17 @@ void setup() {
 
   initDisplay2();
 
-  if (rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS) {
+  if (largeUpdate) {
     // Quick refresh display to pure white to avoid ghosting
     display.fillScreen(GxEPD_WHITE);
     display.nextPage();
     
-  #if LOGGING_ENABLED
-    delay(100);
-  #else  
-    esp_sleep_enable_timer_wakeup(100000); // ms
-    esp_light_sleep_start();
-  #endif
+    #if LOGGING_ENABLED
+      delay(50);
+    #else  
+      esp_sleep_enable_timer_wakeup(50000); // ms
+      esp_light_sleep_start();
+    #endif
   }
 
   getMoonPhase();
