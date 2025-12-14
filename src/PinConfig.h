@@ -6,6 +6,7 @@
 **/
 #define POWER_SENSING_PIN  2  // Power sniffing
 
+#define EPD_TRANSISTOR_PIN 20  // BC327 transistor control for display power
 #define EPD_PWR_PIN    9  // Power control
 #define EPD_BUSY_PIN   3  // Busy signal from display
 #define EPD_RST_PIN    4  // Reset

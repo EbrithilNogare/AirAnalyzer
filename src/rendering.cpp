@@ -7,6 +7,17 @@
 #include "icons/co2.icon.h"
 #include "icons/moon.icon.h"
 
+void largeAntiGhosting(DisplayType& display) {
+  display.fillScreen(GxEPD_WHITE);
+  display.nextPage();
+}
+
+void smallAntiGhosting(DisplayType& display) {
+  display.setPartialWindow(0, GxEPD2_397_GDEM0397T81::HEIGHT - 50, GxEPD2_397_GDEM0397T81::WIDTH_VISIBLE, 30);
+  display.fillScreen(GxEPD_WHITE);
+  display.nextPage();
+}
+
 inline void drawDashedHLine(DisplayType& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {
 	for (int xx = x1; xx <= x2; xx += onLen + offLen) {
 		int segW = std::min(onLen, x2 - xx + 1);

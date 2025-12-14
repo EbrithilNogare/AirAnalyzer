@@ -310,15 +310,33 @@ void sendToThingSpeak() {
 // ################################ Display ####################################
 
 void initDisplay1() {
+  // BC327 is PNP transistor - LOW turns it ON (provides power to display)
+  pinMode(EPD_TRANSISTOR_PIN, OUTPUT);
+  digitalWrite(EPD_TRANSISTOR_PIN, LOW);  // Turn on transistor to power display
+  
   pinMode(EPD_PWR_PIN, OUTPUT);
   digitalWrite(EPD_PWR_PIN, HIGH);
 }
 
 void initDisplay2() {
-  display.init(115200, false, 2, false);  // Changed 2nd param to false to skip initial full refresh
+  display.init(115200, false, 2, false);
   display.setRotation(2); // landscape
   display.setTextColor(GxEPD_BLACK);
 }
+
+void turnOffDisplay() {
+  display.powerOff();
+  digitalWrite(EPD_PWR_PIN, LOW);
+  pinMode(EPD_CS_PIN, INPUT);
+  pinMode(EPD_DC_PIN, INPUT);
+  pinMode(EPD_SCK_PIN, INPUT);
+  pinMode(EPD_MOSI_PIN, INPUT);
+  pinMode(EPD_RST_PIN, INPUT);
+  pinMode(EPD_BUSY_PIN, INPUT);
+  digitalWrite(EPD_TRANSISTOR_PIN, LOW);
+}
+
+// ################################ Setup ####################################
 
 void setup() {
   rtc_bootCount++;
@@ -352,16 +370,9 @@ void setup() {
   initDisplay2();
 
   if (largeUpdate) {
-    // Quick refresh display to pure white to avoid ghosting
-    display.fillScreen(GxEPD_WHITE);
-    display.nextPage();
-    
-    #if LOGGING_ENABLED
-      delay(50);
-    #else  
-      esp_sleep_enable_timer_wakeup(50000); // ms
-      esp_light_sleep_start();
-    #endif
+    largeAntiGhosting(display);
+  } else {
+    smallAntiGhosting(display);
   }
 
   getMoonPhase();
@@ -386,15 +397,7 @@ void setup() {
 
   WiFi.disconnect(true);
 
-  #if LOGGING_ENABLED
-    delay(550);
-  #else  
-    esp_sleep_enable_timer_wakeup(550000); // ms
-    esp_light_sleep_start();
-  #endif
-
-  display.powerOff();
-  digitalWrite(EPD_PWR_PIN, LOW);
+  turnOffDisplay();
 
   unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
 
