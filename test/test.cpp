@@ -2,12 +2,11 @@
 
 void setup() {
   Serial.begin(115200);
-  while(!Serial) {
-	delay(10);
-  }
-  Serial.println("Test setup complete.");
+  delay(1000);
+  Serial.println("setup()");
 }
 
 void loop() {
-  // Empty loop
+  Serial.println("loop()");
+  delay(1000);
 }
