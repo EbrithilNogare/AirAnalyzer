@@ -10,14 +10,18 @@
 void largeAntiGhosting(DisplayType& display) {
   display.fillScreen(GxEPD_WHITE);
   display.nextPage();
-  delay(10);
+  delay(5);
 }
 
 void smallAntiGhosting(DisplayType& display) {
   display.setPartialWindow(0, GxEPD2_397_GDEM0397T81::HEIGHT - 50, GxEPD2_397_GDEM0397T81::WIDTH_VISIBLE, 30);
+  display.fillScreen(GxEPD_BLACK);
+  display.nextPage();
+  delay(5);
+  display.setPartialWindow(0, GxEPD2_397_GDEM0397T81::HEIGHT - 50, GxEPD2_397_GDEM0397T81::WIDTH_VISIBLE, 30);
   display.fillScreen(GxEPD_WHITE);
   display.nextPage();
-  delay(10);
+  delay(5);
 }
 
 inline void drawDashedHLine(DisplayType& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {

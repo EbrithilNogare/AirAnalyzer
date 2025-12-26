@@ -144,7 +144,7 @@ void readSensorSCD(){
 
   scd4x.stopPeriodicMeasurement();
 
-  if (co2 > 0 && co2 < 300) {
+  if (co2 >= 0 && co2 < 300) {
     delay(500);
     uint16_t frcCorrection;
     scd4x.performForcedRecalibration(400, frcCorrection);
