@@ -145,12 +145,15 @@ void readSensorSCD(){
   scd4x.stopPeriodicMeasurement();
 
   // Check if CO2 value is in invalid range (0 < CO2 < 400) and recalibrate
+  // Only positive values are checked; negative values indicate sensor errors
   if (co2 > 0 && co2 < 400) {
     #if LOGGING_ENABLED
       Serial.print("CO2 value ");
       Serial.print(co2);
       Serial.println(" is below 400ppm, performing recalibration to 400ppm");
     #endif
+    
+    delay(500); // Wait for sensor to be ready for calibration
     
     uint16_t frcCorrection;
     uint16_t calibrationError = scd4x.performForcedRecalibration(400, frcCorrection);
@@ -161,6 +164,7 @@ void readSensorSCD(){
         Serial.println(calibrationError);
       } else {
         Serial.print("Calibration successful. Correction: ");
+        // Convert from unsigned offset (0x8000 = 32768 = 0 ppm correction) to signed value
         Serial.print((int16_t)(frcCorrection - 0x8000));
         Serial.println(" ppm");
       }
