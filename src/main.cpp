@@ -8,13 +8,13 @@
 #include <SensirionI2CScd4x.h>
 #include <GxEPD2_BW.h>
 #include <ArduinoJson.h>
-#include "home_assistant.h"
+#include <esp_sleep.h>
 
 #define LOGGING_ENABLED false
 
 #include "../include/config.h"
 #include "rendering.h"
-#include <esp_sleep.h>
+#include "home_assistant.h"
 
 const unsigned long UPDATE_INTERVAL_MS = 300 * 1000; // because of scd40 it must be > 30s
 const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
