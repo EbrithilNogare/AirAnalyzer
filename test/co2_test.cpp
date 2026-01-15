@@ -7,7 +7,7 @@
 #define I2C_SDA_PIN 6
 #define I2C_SCL_PIN 7
 
-#define EnableCalibration true
+#define EnableCalibration false
 
 SensirionI2cScd4x scd4x;
 uint8_t consecutiveErrors = 0;
