@@ -1,5 +1,4 @@
-#ifndef HOME_ASSISTANT_H
-#define HOME_ASSISTANT_H
+#pragma once
 
 #include <Arduino.h>
 #include <WiFi.h>
@@ -7,13 +6,8 @@
 #include <ArduinoJson.h>
 #include "../include/config.h"
 
-#define LOGGING_ENABLED false
-
 void sendToHomeAssistant(float tempAir, float tempESP, float humidity, float co2, float pressure, float batteryVoltage) {
   if (WiFi.status() != WL_CONNECTED){
-    #if LOGGING_ENABLED
-      Serial.println("WiFi not connected, skipping Home Assistant upload");
-    #endif
     return;
   }
 
@@ -28,12 +22,10 @@ void sendToHomeAssistant(float tempAir, float tempESP, float humidity, float co2
   String jsonString;
   serializeJson(doc, jsonString);
 
-  HTTPClient http;
+HTTPClient http;
   http.begin(HA_WEBHOOK_URL);
   http.addHeader("Content-Type", "application/json");
-  http.setTimeout(200);
+  http.setTimeout(1000);
   http.POST(jsonString);
   http.end();
 }
-
-#endif // HOME_ASSISTANT_H

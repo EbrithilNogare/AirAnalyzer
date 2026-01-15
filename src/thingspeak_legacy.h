@@ -1,6 +1,4 @@
-// Legacy ThingSpeak integration - kept for reference, not used in current build
-// This file contains the original ThingSpeak upload functionality
-// Replaced by Home Assistant webhook integration
+#pragma once
 
 #include <Arduino.h>
 #include <WiFi.h>
