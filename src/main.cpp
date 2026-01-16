@@ -87,7 +87,7 @@ void readSensorBMP(){
   pressure = bmp.readPressure() / 100.0f;  // Convert Pa to hPa
   
   if(pressure < 5000 && pressure > 300)
-    scd4x.setAmbientPressure((uint16_t)pressure * 100);
+    scd4x.setAmbientPressure((uint16_t)pressure);
 
   if(pressure > 5000 || pressure < 300) pressure = -3.0f;
 }
