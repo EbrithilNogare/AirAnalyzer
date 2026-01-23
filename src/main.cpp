@@ -28,6 +28,8 @@ SensirionI2cScd4x scd4x;
 const int FORECAST_HOURS = 24;
 
 float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0, co2 = 0, moonPhase = 0;
+float tempSCD = 0, humiditySCD = 0;
+
 
 RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
 RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
@@ -86,8 +88,8 @@ void readSensorBMP(){
   bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
   pressure = bmp.readPressure() / 100.0f;  // Convert Pa to hPa
   
-  if(pressure < 5000 && pressure > 300)
-    scd4x.setAmbientPressure((uint16_t)pressure);
+  //if(pressure < 5000 && pressure > 300)
+  //  scd4x.setAmbientPressure((uint16_t)pressure);
 
   if(pressure > 5000 || pressure < 300) pressure = -3.0f;
 }
@@ -137,6 +139,8 @@ void readSensorSCD(){
     int error = scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
     if (error == 0) {
       co2 = co2Raw;
+      tempSCD = _tempSCD;
+      humiditySCD = _humSCD;
     } else {
       co2 = -error;
     }
@@ -146,11 +150,11 @@ void readSensorSCD(){
 
   scd4x.stopPeriodicMeasurement();
 
-  if (co2 >= 0 && co2 < 300) {
-    delay(500);
-    uint16_t frcCorrection;
-    scd4x.performForcedRecalibration(400, frcCorrection);
-  }
+  //if (co2 >= 0 && co2 < 300) {
+  //  delay(500);
+  //  uint16_t frcCorrection;
+  //  scd4x.performForcedRecalibration(400, frcCorrection);
+  //}
 
   if(co2 > 10000) co2 = -3.0f;
 }
@@ -370,7 +374,7 @@ void setup() {
   );
   
   waitForWiFi();
-  sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage);
+  sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD);
 
   WiFi.disconnect(true);
 
