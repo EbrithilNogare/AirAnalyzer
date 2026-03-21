@@ -9,15 +9,16 @@
 #include <GxEPD2_BW.h>
 #include <ArduinoJson.h>
 #include <esp_sleep.h>
+#include <time.h>
 
 #define LOGGING_ENABLED false
+
+#define TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
 
 #include "../include/config.h"
 #include "rendering.h"
 #include "home_assistant.h"
 
-const unsigned long UPDATE_INTERVAL_MS = 300 * 1000; // because of scd40 it must be > 30s
-const unsigned long WEATHER_UPDATE_INTERVAL_MS = 3600 * 1000;
 
 
 DisplayType display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
@@ -39,17 +40,21 @@ RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
 RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
-RTC_DATA_ATTR uint32_t rtc_bootsFromLastForecastFetch = 0;
-RTC_DATA_ATTR uint32_t rtc_weatherFetchTimestamp = 0;
+RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;           // Unix epoch at last NTP sync
+RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
+RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
+RTC_DATA_ATTR uint32_t rtc_lastDisplayUpdateEpoch = 0;  // Epoch of last display refresh
+RTC_DATA_ATTR uint32_t rtc_lastDataSendEpoch = 0;       // Epoch of last data send
+RTC_DATA_ATTR uint32_t rtc_lastWeatherFetchEpoch = 0;   // Epoch of last weather fetch
+RTC_DATA_ATTR char rtc_lastUpdateTimeStr[6] = "--:--";  // hh:mm shown on display
 
 // ################################ Moon Phase #################################
 
 // Returns moon phase as percentage: 0.0 = new moon, 0.5 = full moon, 1.0 = new moon
-void getMoonPhase() {
+void getMoonPhase(uint32_t epochTime) {
   const uint32_t FULL_MOON_REF = 1763614318;
   const uint32_t LUNAR_CYCLE = 2551443; // 29.53 days in seconds
-  uint32_t currentTime = rtc_weatherFetchTimestamp;
-  uint32_t elapsed = currentTime - FULL_MOON_REF;
+  uint32_t elapsed = epochTime - FULL_MOON_REF;
   moonPhase = (float)(elapsed % LUNAR_CYCLE) / (float)LUNAR_CYCLE;
 }
 
@@ -239,18 +244,6 @@ void fetchWeatherForecast() {
     if (timeArray.size() > 0) {
       String firstTime = timeArray[0].as<String>();
       rtc_forecastStartHour = firstTime.substring(11, 13).toInt();
-      
-      int year = firstTime.substring(0, 4).toInt();
-      int month = firstTime.substring(5, 7).toInt();
-      int day = firstTime.substring(8, 10).toInt();
-      int hour = firstTime.substring(11, 13).toInt();
-      
-      struct tm timeinfo = {0};
-      timeinfo.tm_year = year - 1900;
-      timeinfo.tm_mon = month - 1;
-      timeinfo.tm_mday = day;
-      timeinfo.tm_hour = hour;
-      rtc_weatherFetchTimestamp = mktime(&timeinfo);
     }
     
     for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
@@ -320,82 +313,160 @@ void turnOffDisplay() {
   digitalWrite(EPD_TRANSISTOR_PIN, LOW);
 }
 
+// ################################ Time #####################################
+
+bool isPowerSavingPeriod(const struct tm& t) {
+  // Night: 01:00-05:59
+  if (t.tm_hour >= 1 && t.tm_hour < 6) return true;
+  // Weekday absence: Mon-Fri 10:00-14:59
+  if (t.tm_wday >= 1 && t.tm_wday <= 5 && t.tm_hour >= 10 && t.tm_hour < 15) return true;
+  return false;
+}
+
+void epochToLocalTm(uint32_t epoch, struct tm& out) {
+  time_t t = (time_t)epoch;
+  localtime_r(&t, &out);
+}
+
+bool syncNTP() {
+  configTzTime(TIMEZONE, "pool.ntp.org");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 8000)) return false;
+  rtc_ntpBaseEpoch = (uint32_t)mktime(&timeinfo);
+  rtc_elapsedUs = 0;
+  return true;
+}
+
+uint32_t getCurrentEpoch() {
+  return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
+}
+
 // ################################ Setup ####################################
 
 void setup() {
   rtc_bootCount++;
-  rtc_bootsFromLastForecastFetch++;
+
+  // Restore timezone after deep sleep reset
+  setenv("TZ", TIMEZONE, 1);
+  tzset();
+
+  // Account for elapsed time (processing + sleep) of the previous cycle
+  rtc_elapsedUs += rtc_priorCycleDurationUs;
+  rtc_priorCycleDurationUs = 0;
 
   #if LOGGING_ENABLED
     Serial.begin(115200);
-    while(!Serial) {
-      delay(10);
-    }
+    while (!Serial) delay(10);
   #endif
 
-  if(rtc_bootCount == 1) {
+  if (rtc_bootCount == 1) {
     delay(10000); // Wait for possible upload
   }
 
-  bool largeUpdate = rtc_bootCount == 1 || (rtc_bootsFromLastForecastFetch * UPDATE_INTERVAL_MS) >= WEATHER_UPDATE_INTERVAL_MS;
+  uint32_t currentEpoch = getCurrentEpoch();
 
+  struct tm timeinfo;
+  epochToLocalTm(currentEpoch, timeinfo);
+  int currentHour   = timeinfo.tm_hour;
+  int currentMinute = timeinfo.tm_min;
+  bool isPowerSaving = isPowerSavingPeriod(timeinfo);
+
+  const uint32_t displayInterval = isPowerSaving ? 3600u : 600u; // 60 min power saving / 10 min active
+  const uint32_t dataInterval    = isPowerSaving ? 3600u : 300u; // 60 min power saving / 5 min active
+  const uint32_t weatherInterval = 3600u;                        // always 60 min
+  const uint32_t ntpInterval     = 86400u*7;                     // 7 days
+  const uint32_t EPSILON         = 10u;                          // 10 s tolerance for timer imprecision
+
+  bool needsNtpSync       = (rtc_ntpBaseEpoch == 0) || (currentEpoch + EPSILON - rtc_ntpBaseEpoch >= ntpInterval);
+  bool needsDisplayUpdate = (rtc_bootCount == 1) || (currentEpoch + EPSILON - rtc_lastDisplayUpdateEpoch >= displayInterval);
+  bool needsWeather       = (rtc_bootCount == 1) || (needsDisplayUpdate && (!rtc_weatherDataValid || (currentEpoch + EPSILON - rtc_lastWeatherFetchEpoch >= weatherInterval)));
+  bool needsDataSend      = (rtc_bootCount == 1) || (currentEpoch + EPSILON - rtc_lastDataSendEpoch >= dataInterval);
+  // NTP piggybacks on data/weather WiFi — never wakes WiFi on its own
+  bool needsWiFi         = needsWeather || needsDataSend;
+  bool largeUpdate       = (rtc_bootCount == 1) || needsWeather;
 
   initSensors();
+  if (needsDisplayUpdate) initDisplay1();
+  if (needsWiFi) connectWiFi();
+
   readSensors();
-  initDisplay1(); 
-  connectWiFi();
-  
-  if (largeUpdate) {
-    waitForWiFi();
+
+  if (needsWiFi) waitForWiFi();
+
+  if (needsNtpSync && WiFi.status() == WL_CONNECTED) {
+    if (syncNTP()) {
+      currentEpoch  = getCurrentEpoch();
+      epochToLocalTm(currentEpoch, timeinfo);
+      currentHour   = timeinfo.tm_hour;
+      currentMinute = timeinfo.tm_min;
+      isPowerSaving = isPowerSavingPeriod(timeinfo);
+    }
+  }
+
+  if (needsWeather && WiFi.status() == WL_CONNECTED) {
     fetchWeatherForecast();
-    rtc_bootsFromLastForecastFetch = 0;
+    rtc_lastWeatherFetchEpoch = currentEpoch;
   }
 
-  initDisplay2();
-
-  if (largeUpdate) {
-    largeAntiGhosting(display);
-  } else {
-    smallAntiGhosting(display);
+  if (needsDisplayUpdate) {
+    initDisplay2();
+    if (largeUpdate) {
+      largeAntiGhosting(display);
+    } else {
+      smallAntiGhosting(display);
+    }
+    getMoonPhase(currentEpoch);
+    snprintf(rtc_lastUpdateTimeStr, sizeof(rtc_lastUpdateTimeStr), "%02d:%02d", currentHour, currentMinute);
+    updateDisplay(
+      display,
+      tempAir,
+      humidity,
+      co2,
+      pressure,
+      rtc_sunriseTimeStr,
+      rtc_sunsetTimeStr,
+      rtc_forecastTemp,
+      rtc_forecastApparentTemp,
+      rtc_forecastRain,
+      FORECAST_HOURS,
+      rtc_forecastStartHour,
+      rtc_weatherDataValid,
+      moonPhase,
+      rtc_lastUpdateTimeStr
+    );
+    rtc_lastDisplayUpdateEpoch = currentEpoch;
   }
 
-  getMoonPhase();
-  updateDisplay(
-    display,
-    tempAir,
-    humidity,
-    co2,
-    pressure,
-    rtc_sunriseTimeStr,
-    rtc_sunsetTimeStr,
-    rtc_forecastTemp,
-    rtc_forecastApparentTemp,
-    rtc_forecastRain,
-    FORECAST_HOURS,
-    rtc_forecastStartHour,
-    rtc_weatherDataValid,
-    moonPhase
-  );
-  
-  waitForWiFi();
-  sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD);
+  if (needsDataSend && WiFi.status() == WL_CONNECTED) {
+    sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD);
+    rtc_lastDataSendEpoch = currentEpoch;
+  }
 
-  WiFi.disconnect(true);
+  if (needsWiFi) WiFi.disconnect(true);
+  if (needsDisplayUpdate) turnOffDisplay();
 
-  turnOffDisplay();
+  // Compute sleep duration until the next needed event
+  const uint32_t nextDisplayInterval = isPowerSaving ? 3600u : 600u;
+  const uint32_t nextDataInterval    = isPowerSaving ? 3600u : 300u;
+  uint32_t nextDisplayWake = rtc_lastDisplayUpdateEpoch + nextDisplayInterval;
+  uint32_t nextDataWake    = rtc_lastDataSendEpoch    + nextDataInterval;
+  uint32_t nextWake        = min(nextDisplayWake, nextDataWake);
 
-  unsigned long sleepTimeUs = max((UPDATE_INTERVAL_MS - millis()) * 1000ULL, 1000ULL);
+  int32_t sleepSeconds = (int32_t)(nextWake - currentEpoch);
+  if (sleepSeconds < 30)   sleepSeconds = 30;
+  if (sleepSeconds > 3600) sleepSeconds = 3600;
 
+  uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;
+  rtc_priorCycleDurationUs = (uint64_t)millis() * 1000ULL + sleepUs;
 
   #if LOGGING_ENABLED
-    Serial.println("faking deep sleep for debug");
-    delay(10);
-    Serial.end();
-    delay(sleepTimeUs / 1000);
+    Serial.println("Faking deep sleep for debug");
+    Serial.flush();
+    delay(sleepUs / 1000);
     ESP.restart();
   #endif
-    
-  esp_sleep_enable_timer_wakeup(sleepTimeUs);
+
+  esp_sleep_enable_timer_wakeup(sleepUs);
   esp_deep_sleep_start();
 }
 

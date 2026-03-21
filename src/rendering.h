@@ -11,7 +11,7 @@ void largeAntiGhosting(DisplayType& display);
 
 void smallAntiGhosting(DisplayType& display);
 
-void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase);
+void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase, const char* lastUpdateTime);
 
 void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid);
 

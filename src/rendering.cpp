@@ -267,7 +267,8 @@ void updateDisplay(
 		int forecastHours,
 		int forecastStartHour,
 		bool weatherDataValid,
-		float moonPhase
+		float moonPhase,
+		const char* lastUpdateTime
 	) {
 	display.setPartialWindow(0, 0, display.width(), display.height());
 	display.firstPage();
@@ -324,5 +325,12 @@ void updateDisplay(
 				case 6: display.drawBitmap(iconDrawX, iconDrawY, epd_bitmap_pressure, iconW, iconH, GxEPD_BLACK); break;
 			}
 		}
+
+		display.setFont(&FreeSans12pt7b);
+		int moonCenterX = gap + 3 * (iconSize + gap) + iconSize / 2;
+		int16_t tbx2, tby2; uint16_t tbw2, tbh2;
+		display.getTextBounds(lastUpdateTime, 0, 0, &tbx2, &tby2, &tbw2, &tbh2);
+		display.setCursor(moonCenterX - tbw2 / 2, screenH - 3);
+		display.print(lastUpdateTime);
 	} while (display.nextPage());
 }
