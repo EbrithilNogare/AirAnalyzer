@@ -316,10 +316,11 @@ void turnOffDisplay() {
 // ################################ Time #####################################
 
 bool isPowerSavingPeriod(const struct tm& t) {
-  // Night: 01:00-05:59
-  if (t.tm_hour >= 1 && t.tm_hour < 6) return true;
-  // Weekday absence: Mon-Fri 10:00-14:59
-  if (t.tm_wday >= 1 && t.tm_wday <= 5 && t.tm_hour >= 10 && t.tm_hour < 15) return true;
+  // Night: 01:00-05:29
+  if (t.tm_hour >= 1 && (t.tm_hour < 5 || (t.tm_hour == 5 && t.tm_min < 30))) return true;
+  // Weekday absence: Mon-Fri 10:00-14:29
+  if (t.tm_wday >= 1 && t.tm_wday <= 5 &&
+      t.tm_hour >= 10 && (t.tm_hour < 14 || (t.tm_hour == 14 && t.tm_min < 30))) return true;
   return false;
 }
 
