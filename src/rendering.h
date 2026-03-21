@@ -11,10 +11,12 @@ void largeAntiGhosting(DisplayType& display);
 
 void smallAntiGhosting(DisplayType& display);
 
-void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase);
+void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase);
 
-void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid);
+void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid);
 
 void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal);
+
+void drawApparentTempLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal);
 
 void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal);

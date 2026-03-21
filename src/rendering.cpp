@@ -134,6 +134,36 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 	}
 }
 
+void drawApparentTempLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
+	float range = maxVal - minVal;
+	if (range <= 0.001f) range = 1.0f;
+
+	for (int i = 0; i < dataSize - 1; i++) {
+		int x1 = x + i * w / dataSize;
+		int x2 = x + (i + 1) * w / dataSize;
+		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
+
+		for (int px = x1; px < x2; px++) {
+			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
+			int nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
+			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
+			currentY = std::max(y, std::min(y + h - 1, currentY));
+
+			// 2px dash, 2px gap pattern; draw white for gap to erase temp line
+			bool isDash = ((px - x) % 4) < 2;
+			uint16_t color = isDash ? GxEPD_BLACK : GxEPD_WHITE;
+
+			// 2 pixels thick
+			for (int off = 0; off <= 1; off++) {
+				int py = currentY + off;
+				if (py >= y && py <= y + h - 1) {
+					display.drawPixel(px, py, color);
+				}
+			}
+		}
+	}
+}
+
 void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal) {
 	int colWidth = std::max(1, w / dataSize);
 	for (int i = 0; i < dataSize; i++) {
@@ -147,7 +177,7 @@ void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const flo
 	}
 }
 
-void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
+void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid) {
 	if (!weatherDataValid) return;
 	int screenW = display.width();
 	int screenH = display.height();
@@ -162,6 +192,8 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	for (int i = 0; i < forecastHours; i++) {
 		if (forecastTemp[i] < minTemp) minTemp = forecastTemp[i];
 		if (forecastTemp[i] > maxTemp) maxTemp = forecastTemp[i];
+		if (forecastApparentTemp[i] < minTemp) minTemp = forecastApparentTemp[i];
+		if (forecastApparentTemp[i] > maxTemp) maxTemp = forecastApparentTemp[i];
 		if (forecastRain[i] > maxRain) maxRain = forecastRain[i];
 	}
 	minTemp = floor(minTemp);
@@ -171,8 +203,9 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	int tempGraphY = weatherY + 28;
 	int rainHeight = std::max(12, graphHeight / 3);
 	int rainY = tempGraphY + graphHeight;
-	
+
 	drawForecastGraph(display, graphX, tempGraphY, graphWidth, graphHeight, forecastTemp, forecastHours, minTemp, maxTemp);
+	drawApparentTempLine(display, graphX, tempGraphY, graphWidth, graphHeight, forecastApparentTemp, forecastHours, minTemp, maxTemp);
 
 	display.setFont(&FreeSans12pt7b);
 	int hourY = weatherY + 18;
@@ -229,6 +262,7 @@ void updateDisplay(
 		const String& sunriseTime,
 		const String& sunsetTime,
 		const float* forecastTemp,
+		const float* forecastApparentTemp,
 		const float* forecastRain,
 		int forecastHours,
 		int forecastStartHour,
@@ -239,7 +273,7 @@ void updateDisplay(
 	display.firstPage();
 	do {
 		display.fillScreen(GxEPD_WHITE);
-		drawWeatherForecast(display, forecastTemp, forecastRain, forecastHours, forecastStartHour, sunriseTime, sunsetTime, weatherDataValid);
+		drawWeatherForecast(display, forecastTemp, forecastApparentTemp, forecastRain, forecastHours, forecastStartHour, sunriseTime, sunsetTime, weatherDataValid);
 
 		int screenW = display.width();
 		int screenH = display.height();

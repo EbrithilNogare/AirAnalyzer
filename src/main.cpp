@@ -32,6 +32,7 @@ float tempSCD = 0, humiditySCD = 0;
 
 
 RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
+RTC_DATA_ATTR float rtc_forecastApparentTemp[FORECAST_HOURS];
 RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
 RTC_DATA_ATTR char rtc_sunriseTimeStr[6] = "--:--";
 RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
@@ -210,7 +211,7 @@ void fetchWeatherForecast() {
     Serial.println("Fetching weather forecast...");
   #endif
   HTTPClient http;
-  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
+  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,apparent_temperature,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
   
   int httpCode = http.GET();
   if (httpCode == 200) {
@@ -230,6 +231,7 @@ void fetchWeatherForecast() {
     
     // Parse hourly temperature and rain
     JsonArray tempArray = doc["hourly"]["temperature_2m"];
+    JsonArray apparentTempArray = doc["hourly"]["apparent_temperature"];
     JsonArray rainArray = doc["hourly"]["rain"];
     JsonArray snowArray = doc["hourly"]["snowfall"];
     JsonArray timeArray = doc["hourly"]["time"];
@@ -253,6 +255,7 @@ void fetchWeatherForecast() {
     
     for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
       rtc_forecastTemp[i] = tempArray[i];
+      rtc_forecastApparentTemp[i] = apparentTempArray[i] | rtc_forecastTemp[i];
       // Combine rain and snowfall (snowfall in cm, convert to mm equivalent)
       float rain = rainArray[i] | 0.0f;
       float snow = snowArray[i] | 0.0f;
@@ -366,6 +369,7 @@ void setup() {
     rtc_sunriseTimeStr,
     rtc_sunsetTimeStr,
     rtc_forecastTemp,
+    rtc_forecastApparentTemp,
     rtc_forecastRain,
     FORECAST_HOURS,
     rtc_forecastStartHour,
