@@ -40,7 +40,7 @@ RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
 RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
-RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;           // Unix epoch at last NTP sync
+RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NTP sync
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
 RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
 RTC_DATA_ATTR uint32_t rtc_lastDisplayUpdateEpoch = 0;  // Epoch of last display refresh
@@ -329,17 +329,28 @@ void epochToLocalTm(uint32_t epoch, struct tm& out) {
   localtime_r(&t, &out);
 }
 
-bool syncNTP() {
-  configTzTime(TIMEZONE, "pool.ntp.org");
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo, 8000)) return false;
-  rtc_ntpBaseEpoch = (uint32_t)mktime(&timeinfo);
-  rtc_elapsedUs = 0;
-  return true;
-}
-
 uint32_t getCurrentEpoch() {
   return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
+}
+
+bool syncNTP() {
+  uint32_t oldEpoch = getCurrentEpoch();
+  
+  configTzTime(TIMEZONE, "pool.ntp.org");
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo, 5000)) return false;
+  
+  uint32_t newEpoch = (uint32_t)mktime(&timeinfo);
+  int32_t timeDrift = rtc_ntpBaseEpoch == 0 ? 0 :(int32_t)(newEpoch - oldEpoch);
+  
+  rtc_ntpBaseEpoch = newEpoch;
+  rtc_elapsedUs = 0;
+
+  rtc_lastDisplayUpdateEpoch += timeDrift;
+  rtc_lastDataSendEpoch += timeDrift;
+  rtc_lastWeatherFetchEpoch += timeDrift;
+
+  return true;
 }
 
 // ################################ Setup ####################################
@@ -375,7 +386,7 @@ void setup() {
   const uint32_t displayInterval = isPowerSaving ? 3600u : 600u; // 60 min power saving / 10 min active
   const uint32_t dataInterval    = isPowerSaving ? 3600u : 300u; // 60 min power saving / 5 min active
   const uint32_t weatherInterval = 3600u;                        // always 60 min
-  const uint32_t ntpInterval     = 86400u*7;                     // 7 days
+  const uint32_t ntpInterval     = 86400u    ;                   // 1 day
   const uint32_t EPSILON         = 10u;                          // 10 s tolerance for timer imprecision
 
   bool needsNtpSync       = (rtc_ntpBaseEpoch == 0) || (currentEpoch + EPSILON - rtc_ntpBaseEpoch >= ntpInterval);
