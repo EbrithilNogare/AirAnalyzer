@@ -384,9 +384,9 @@ void setup() {
   bool isPowerSaving = isPowerSavingPeriod(timeinfo);
 
   const uint32_t displayInterval = isPowerSaving ? 3600u : 600u; // 60 min power saving / 10 min active
-  const uint32_t dataInterval    = isPowerSaving ? 3600u : 300u; // 60 min power saving / 5 min active
+  const uint32_t dataInterval    = isPowerSaving ? 1800u : 300u; // 30 min power saving / 5 min active
   const uint32_t weatherInterval = 3600u;                        // always 60 min
-  const uint32_t ntpInterval     = 86400u    ;                   // 1 day
+  const uint32_t ntpInterval     = 86400u;                       // 1 day
   const uint32_t EPSILON         = 10u;                          // 10 s tolerance for timer imprecision
 
   bool needsNtpSync       = (rtc_ntpBaseEpoch == 0) || (currentEpoch + EPSILON - rtc_ntpBaseEpoch >= ntpInterval);
