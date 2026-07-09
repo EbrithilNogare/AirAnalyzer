@@ -268,7 +268,7 @@ void updateDisplay(
 		int forecastStartHour,
 		bool weatherDataValid,
 		float moonPhase,
-		const char* lastUpdateTime
+		int batteryPercent
 	) {
 	display.setPartialWindow(0, 0, display.width(), display.height());
 	display.firstPage();
@@ -328,9 +328,11 @@ void updateDisplay(
 
 		display.setFont(&FreeSans12pt7b);
 		int moonCenterX = gap + 3 * (iconSize + gap) + iconSize / 2;
+		char batStr[5];
+		snprintf(batStr, sizeof(batStr), "%d%%", batteryPercent);
 		int16_t tbx2, tby2; uint16_t tbw2, tbh2;
-		display.getTextBounds(lastUpdateTime, 0, 0, &tbx2, &tby2, &tbw2, &tbh2);
+		display.getTextBounds(batStr, 0, 0, &tbx2, &tby2, &tbw2, &tbh2);
 		display.setCursor(moonCenterX - tbw2 / 2, screenH - 3);
-		display.print(lastUpdateTime);
+		display.print(batStr);
 	} while (display.nextPage());
 }

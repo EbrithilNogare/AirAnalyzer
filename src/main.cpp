@@ -46,7 +46,7 @@ RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total 
 RTC_DATA_ATTR uint32_t rtc_lastDisplayUpdateEpoch = 0;  // Epoch of last display refresh
 RTC_DATA_ATTR uint32_t rtc_lastDataSendEpoch = 0;       // Epoch of last data send
 RTC_DATA_ATTR uint32_t rtc_lastWeatherFetchEpoch = 0;   // Epoch of last weather fetch
-RTC_DATA_ATTR char rtc_lastUpdateTimeStr[6] = "--:--";  // hh:mm shown on display
+RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
 
 // ################################ Moon Phase #################################
 
@@ -428,7 +428,7 @@ void setup() {
       smallAntiGhosting(display);
     }
     getMoonPhase(currentEpoch);
-    snprintf(rtc_lastUpdateTimeStr, sizeof(rtc_lastUpdateTimeStr), "%02d:%02d", currentHour, currentMinute);
+    rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
     updateDisplay(
       display,
       tempAir,
@@ -444,7 +444,7 @@ void setup() {
       rtc_forecastStartHour,
       rtc_weatherDataValid,
       moonPhase,
-      rtc_lastUpdateTimeStr
+      rtc_batteryPercent
     );
     rtc_lastDisplayUpdateEpoch = currentEpoch;
   }
