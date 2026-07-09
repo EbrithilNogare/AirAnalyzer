@@ -30,6 +30,7 @@ const int FORECAST_HOURS = 24;
 
 float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0, co2 = 0, moonPhase = 0;
 float tempSCD = 0, humiditySCD = 0;
+int wifiRSSI = 0;
 
 
 RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
@@ -43,10 +44,9 @@ RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NTP sync
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
 RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
-RTC_DATA_ATTR uint32_t rtc_lastDisplayUpdateEpoch = 0;  // Epoch of last display refresh
-RTC_DATA_ATTR uint32_t rtc_lastDataSendEpoch = 0;       // Epoch of last data send
-RTC_DATA_ATTR uint32_t rtc_lastWeatherFetchEpoch = 0;   // Epoch of last weather fetch
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
+
+const uint32_t CYCLE_SECONDS = 3600; // wake every 60 minutes
 
 // ################################ Moon Phase #################################
 
@@ -315,42 +315,29 @@ void turnOffDisplay() {
 
 // ################################ Time #####################################
 
-bool isPowerSavingPeriod(const struct tm& t) {
-  // Night: 01:00-05:29
-  if (t.tm_hour >= 1 && (t.tm_hour < 5 || (t.tm_hour == 5 && t.tm_min < 30))) return true;
-  // Weekday absence: Mon-Wed 10:00-14:29
-  if (t.tm_wday >= 1 && t.tm_wday <= 3 &&
-      t.tm_hour >= 10 && (t.tm_hour < 14 || (t.tm_hour == 14 && t.tm_min < 30))) return true;
-  return false;
-}
-
-void epochToLocalTm(uint32_t epoch, struct tm& out) {
-  time_t t = (time_t)epoch;
-  localtime_r(&t, &out);
-}
-
 uint32_t getCurrentEpoch() {
   return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
 }
 
 bool syncNTP() {
-  uint32_t oldEpoch = getCurrentEpoch();
-  
   configTzTime(TIMEZONE, "pool.ntp.org");
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 5000)) return false;
-  
-  uint32_t newEpoch = (uint32_t)mktime(&timeinfo);
-  int32_t timeDrift = rtc_ntpBaseEpoch == 0 ? 0 :(int32_t)(newEpoch - oldEpoch);
-  
-  rtc_ntpBaseEpoch = newEpoch;
+
+  rtc_ntpBaseEpoch = (uint32_t)mktime(&timeinfo);
   rtc_elapsedUs = 0;
 
-  rtc_lastDisplayUpdateEpoch += timeDrift;
-  rtc_lastDataSendEpoch += timeDrift;
-  rtc_lastWeatherFetchEpoch += timeDrift;
-
   return true;
+}
+
+// ####################### Home Assistant task ###############################
+
+volatile bool haSendDone = false;
+
+void haSendTask(void* param) {
+  sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+  haSendDone = true;
+  vTaskDelete(NULL);
 }
 
 // ################################ Setup ####################################
@@ -375,98 +362,63 @@ void setup() {
     delay(10000); // Wait for possible upload
   }
 
-  uint32_t currentEpoch = getCurrentEpoch();
-
-  struct tm timeinfo;
-  epochToLocalTm(currentEpoch, timeinfo);
-  int currentHour   = timeinfo.tm_hour;
-  int currentMinute = timeinfo.tm_min;
-  bool isPowerSaving = isPowerSavingPeriod(timeinfo);
-
-  const uint32_t displayInterval = isPowerSaving ? 3600u : 600u; // 60 min power saving / 10 min active
-  const uint32_t dataInterval    = isPowerSaving ? 1800u : 300u; // 30 min power saving / 5 min active
-  const uint32_t weatherInterval = 3600u;                        // always 60 min
-  const uint32_t ntpInterval     = 86400u;                       // 1 day
-  const uint32_t EPSILON         = 10u;                          // 10 s tolerance for timer imprecision
-
-  bool needsNtpSync       = (rtc_ntpBaseEpoch == 0) || (currentEpoch + EPSILON - rtc_ntpBaseEpoch >= ntpInterval);
-  bool needsDisplayUpdate = (rtc_bootCount == 1) || (currentEpoch + EPSILON - rtc_lastDisplayUpdateEpoch >= displayInterval);
-  bool needsWeather       = (rtc_bootCount == 1) || (needsDisplayUpdate && (!rtc_weatherDataValid || (currentEpoch + EPSILON - rtc_lastWeatherFetchEpoch >= weatherInterval)));
-  bool needsDataSend      = (rtc_bootCount == 1) || (currentEpoch + EPSILON - rtc_lastDataSendEpoch >= dataInterval);
-  // NTP piggybacks on data/weather WiFi — never wakes WiFi on its own
-  bool needsWiFi         = needsWeather || needsDataSend;
-  bool largeUpdate       = (rtc_bootCount == 1) || needsWeather;
-
+  // Measure everything before WiFi turns on, so radio current peaks can't disturb the readings (battery voltage especially)
   initSensors();
-  if (needsDisplayUpdate) initDisplay1();
-  if (needsWiFi) connectWiFi();
-
   readSensors();
 
-  if (needsWiFi) waitForWiFi();
+  initDisplay1();
+  connectWiFi();
+  waitForWiFi();
 
+  uint32_t currentEpoch = getCurrentEpoch();
+
+  bool needsNtpSync = (rtc_ntpBaseEpoch == 0) || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
   if (needsNtpSync && WiFi.status() == WL_CONNECTED) {
-    if (syncNTP()) {
-      currentEpoch  = getCurrentEpoch();
-      epochToLocalTm(currentEpoch, timeinfo);
-      currentHour   = timeinfo.tm_hour;
-      currentMinute = timeinfo.tm_min;
-      isPowerSaving = isPowerSavingPeriod(timeinfo);
-    }
+    if (syncNTP()) currentEpoch = getCurrentEpoch();
   }
 
-  if (needsWeather && WiFi.status() == WL_CONNECTED) {
+  haSendDone = true;
+  if (WiFi.status() == WL_CONNECTED) {
+    wifiRSSI = WiFi.RSSI();
+    // Send to Home Assistant in parallel with the weather fetch
+    haSendDone = false;
+    if (xTaskCreate(haSendTask, "haSend", 8192, NULL, 1, NULL) != pdPASS) {
+      sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+      haSendDone = true;
+    }
     fetchWeatherForecast();
-    rtc_lastWeatherFetchEpoch = currentEpoch;
   }
 
-  if (needsDisplayUpdate) {
-    initDisplay2();
-    if (largeUpdate) {
-      largeAntiGhosting(display);
-    } else {
-      smallAntiGhosting(display);
-    }
-    getMoonPhase(currentEpoch);
-    rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
-    updateDisplay(
-      display,
-      tempAir,
-      humidity,
-      co2,
-      pressure,
-      rtc_sunriseTimeStr,
-      rtc_sunsetTimeStr,
-      rtc_forecastTemp,
-      rtc_forecastApparentTemp,
-      rtc_forecastRain,
-      FORECAST_HOURS,
-      rtc_forecastStartHour,
-      rtc_weatherDataValid,
-      moonPhase,
-      rtc_batteryPercent
-    );
-    rtc_lastDisplayUpdateEpoch = currentEpoch;
-  }
+  initDisplay2();
+  largeAntiGhosting(display);
+  getMoonPhase(currentEpoch);
+  rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
+  updateDisplay(
+    display,
+    tempAir,
+    humidity,
+    co2,
+    pressure,
+    rtc_sunriseTimeStr,
+    rtc_sunsetTimeStr,
+    rtc_forecastTemp,
+    rtc_forecastApparentTemp,
+    rtc_forecastRain,
+    FORECAST_HOURS,
+    rtc_forecastStartHour,
+    rtc_weatherDataValid,
+    moonPhase,
+    rtc_batteryPercent
+  );
 
-  if (needsDataSend && WiFi.status() == WL_CONNECTED) {
-    sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD);
-    rtc_lastDataSendEpoch = currentEpoch;
-  }
+  // The HA send task usually finished during the display refresh — wait out any remainder before dropping WiFi
+  for (int i = 0; i < 5000 && !haSendDone; i += 50) delay(50);
+  WiFi.disconnect(true);
 
-  if (needsWiFi) WiFi.disconnect(true);
-  if (needsDisplayUpdate) turnOffDisplay();
+  turnOffDisplay();
 
-  // Compute sleep duration until the next needed event
-  const uint32_t nextDisplayInterval = isPowerSaving ? 3600u : 600u;
-  const uint32_t nextDataInterval    = isPowerSaving ? 3600u : 300u;
-  uint32_t nextDisplayWake = rtc_lastDisplayUpdateEpoch + nextDisplayInterval;
-  uint32_t nextDataWake    = rtc_lastDataSendEpoch    + nextDataInterval;
-  uint32_t nextWake        = min(nextDisplayWake, nextDataWake);
-
-  int32_t sleepSeconds = (int32_t)(nextWake - currentEpoch);
-  if (sleepSeconds < 30)   sleepSeconds = 30;
-  if (sleepSeconds > 3600) sleepSeconds = 3600;
+  // Sleep the remainder of the hour so wake-ups stay on a 60-minute cadence
+  int32_t sleepSeconds = min(max((int32_t)CYCLE_SECONDS - (int32_t)(millis() / 1000), (int32_t)30), (int32_t)3600);
 
   uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;
   rtc_priorCycleDurationUs = (uint64_t)millis() * 1000ULL + sleepUs;
