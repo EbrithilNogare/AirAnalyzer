@@ -13,8 +13,6 @@
 
 #define LOGGING_ENABLED false
 
-#define TIMEZONE "CET-1CEST,M3.5.0,M10.5.0/3"
-
 #include "../include/config.h"
 #include "rendering.h"
 #include "home_assistant.h"
@@ -45,8 +43,6 @@ RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NT
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
 RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
-
-const uint32_t CYCLE_SECONDS = 3600; // wake every 60 minutes
 
 // ################################ Moon Phase #################################
 
