@@ -43,6 +43,7 @@ RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NT
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
 RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
+RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last weather fetch + display refresh
 
 // ################################ Moon Phase #################################
 
@@ -316,12 +317,19 @@ uint32_t getCurrentEpoch() {
 }
 
 bool syncNTP() {
+  uint32_t oldEpoch = getCurrentEpoch();
+
   configTzTime(TIMEZONE, "pool.ntp.org");
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo, 5000)) return false;
 
-  rtc_ntpBaseEpoch = (uint32_t)mktime(&timeinfo);
+  uint32_t newEpoch = (uint32_t)mktime(&timeinfo);
+  int32_t timeDrift = rtc_ntpBaseEpoch == 0 ? 0 : (int32_t)(newEpoch - oldEpoch);
+
+  rtc_ntpBaseEpoch = newEpoch;
   rtc_elapsedUs = 0;
+
+  rtc_lastFullUpdateEpoch += timeDrift;
 
   return true;
 }
@@ -358,15 +366,19 @@ void setup() {
     delay(10000); // Wait for possible upload
   }
 
+  uint32_t currentEpoch = getCurrentEpoch();
+  const uint32_t EPSILON = 10;  // 10 s tolerance for timer imprecision
+
+  // Data send happens every wake; weather fetch + display refresh only every FULL_UPDATE_SECONDS
+  bool needsFullUpdate = (rtc_bootCount == 1) || !rtc_weatherDataValid || (currentEpoch + EPSILON - rtc_lastFullUpdateEpoch >= FULL_UPDATE_SECONDS);
+
   // Measure everything before WiFi turns on, so radio current peaks can't disturb the readings (battery voltage especially)
   initSensors();
   readSensors();
 
-  initDisplay1();
+  if (needsFullUpdate) initDisplay1();
   connectWiFi();
   waitForWiFi();
-
-  uint32_t currentEpoch = getCurrentEpoch();
 
   bool needsNtpSync = (rtc_ntpBaseEpoch == 0) || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
   if (needsNtpSync && WiFi.status() == WL_CONNECTED) {
@@ -376,44 +388,51 @@ void setup() {
   haSendDone = true;
   if (WiFi.status() == WL_CONNECTED) {
     wifiRSSI = WiFi.RSSI();
-    // Send to Home Assistant in parallel with the weather fetch
-    haSendDone = false;
-    if (xTaskCreate(haSendTask, "haSend", 8192, NULL, 1, NULL) != pdPASS) {
+    if (needsFullUpdate) {
+      // Send to Home Assistant in parallel with the weather fetch
+      haSendDone = false;
+      if (xTaskCreate(haSendTask, "haSend", 8192, NULL, 1, NULL) != pdPASS) {
+        sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+        haSendDone = true;
+      }
+      fetchWeatherForecast();
+    } else {
       sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
-      haSendDone = true;
     }
-    fetchWeatherForecast();
   }
 
-  initDisplay2();
-  largeAntiGhosting(display);
-  getMoonPhase(currentEpoch);
-  rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
-  updateDisplay(
-    display,
-    tempAir,
-    humidity,
-    co2,
-    pressure,
-    rtc_sunriseTimeStr,
-    rtc_sunsetTimeStr,
-    rtc_forecastTemp,
-    rtc_forecastApparentTemp,
-    rtc_forecastRain,
-    FORECAST_HOURS,
-    rtc_forecastStartHour,
-    rtc_weatherDataValid,
-    moonPhase,
-    rtc_batteryPercent
-  );
+  if (needsFullUpdate) {
+    initDisplay2();
+    largeAntiGhosting(display);
+    getMoonPhase(currentEpoch);
+    rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
+    updateDisplay(
+      display,
+      tempAir,
+      humidity,
+      co2,
+      pressure,
+      rtc_sunriseTimeStr,
+      rtc_sunsetTimeStr,
+      rtc_forecastTemp,
+      rtc_forecastApparentTemp,
+      rtc_forecastRain,
+      FORECAST_HOURS,
+      rtc_forecastStartHour,
+      rtc_weatherDataValid,
+      moonPhase,
+      rtc_batteryPercent
+    );
+    rtc_lastFullUpdateEpoch = currentEpoch;
+  }
 
   // The HA send task usually finished during the display refresh — wait out any remainder before dropping WiFi
   for (int i = 0; i < 5000 && !haSendDone; i += 50) delay(50);
   WiFi.disconnect(true);
 
-  turnOffDisplay();
+  if (needsFullUpdate) turnOffDisplay();
 
-  // Sleep the remainder of the hour so wake-ups stay on a 60-minute cadence
+  // Sleep the remainder of the cycle so wake-ups stay on a CYCLE_SECONDS cadence
   int32_t sleepSeconds = min(max((int32_t)CYCLE_SECONDS - (int32_t)(millis() / 1000), (int32_t)30), (int32_t)3600);
 
   uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;

@@ -12,6 +12,9 @@ The AirAnalyzer sends the following sensor data to Home Assistant:
 - **co2**: CO₂ concentration from SCD40 sensor (ppm)
 - **pressure**: Atmospheric pressure from BMP280 sensor (hPa)
 - **battery_voltage**: Battery voltage (V)
+- **temperature_scd**: Air temperature from SCD40 sensor (°C)
+- **humidity_scd**: Relative humidity from SCD40 sensor (%)
+- **wifi_rssi**: WiFi signal strength (dBm)
 
 ## Setup Steps
 
@@ -41,6 +44,9 @@ action:
       co2: "{{ trigger.json.co2 }}"
       pressure: "{{ trigger.json.pressure }}"
       battery_voltage: "{{ trigger.json.battery_voltage }}"
+      temperature_scd: "{{ trigger.json.temperature_scd }}"
+      humidity_scd: "{{ trigger.json.humidity_scd }}"
+      wifi_rssi: "{{ trigger.json.wifi_rssi }}"
 mode: single
 ```
 
@@ -98,6 +104,27 @@ template:
         unit_of_measurement: "°C"
         device_class: temperature
         state_class: measurement
+
+      - name: "Air Analyzer SCD Temperature"
+        unique_id: air_analyzer_scd_temperature
+        state: "{{ trigger.event.data.temperature_scd }}"
+        unit_of_measurement: "°C"
+        device_class: temperature
+        state_class: measurement
+
+      - name: "Air Analyzer SCD Humidity"
+        unique_id: air_analyzer_scd_humidity
+        state: "{{ trigger.event.data.humidity_scd }}"
+        unit_of_measurement: "%"
+        device_class: humidity
+        state_class: measurement
+
+      - name: "Air Analyzer WiFi RSSI"
+        unique_id: air_analyzer_wifi_rssi
+        state: "{{ trigger.event.data.wifi_rssi }}"
+        unit_of_measurement: "dBm"
+        device_class: signal_strength
+        state_class: measurement
 ```
 
 After adding this, restart Home Assistant.
@@ -112,6 +139,9 @@ The sensors will appear as:
 - `sensor.air_analyzer_pressure`
 - `sensor.air_analyzer_battery`
 - `sensor.air_analyzer_esp_temperature`
+- `sensor.air_analyzer_scd_temperature`
+- `sensor.air_analyzer_scd_humidity`
+- `sensor.air_analyzer_wifi_rssi`
 
 1. Go to your dashboard
 2. Click **Edit Dashboard** → **+ Add Card** → **Entities Card**
@@ -124,7 +154,7 @@ The sensors will appear as:
 You can test the webhook from your computer using curl:
 
 ```bash
-curl -X POST http://homeassistant.local:8123/api/webhook/XXXXX -H "Content-Type: application/json" -d '{ "temperature": 22.5, "temperature_esp": 35.2, "humidity": 45.3, "co2": 650, "pressure": 1013, "battery_voltage": 4.15 }'
+curl -X POST http://homeassistant.local:8123/api/webhook/XXXXX -H "Content-Type: application/json" -d '{ "temperature": 22.5, "temperature_esp": 35.2, "humidity": 45.3, "co2": 650, "pressure": 1013, "battery_voltage": 4.15, "temperature_scd": 22.8, "humidity_scd": 44.7, "wifi_rssi": -62 }'
 ```
 
 If successful, you should see the values update in your Home Assistant helpers.
