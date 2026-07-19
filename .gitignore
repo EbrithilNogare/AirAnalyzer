@@ -6,3 +6,8 @@
 
 # Sensitive configuration
 include/config.h
+
+# Local render preview build artifacts
+tools/preview/preview
+tools/preview/out.ppm
+tools/preview/out.png
