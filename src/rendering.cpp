@@ -59,60 +59,81 @@ inline bool shouldDrawPixel(int x, int y, int ditherLevel) {
 	return (ditherPatterns[ditherLevel][py] >> (3 - px)) & 1;
 }
 
+// Catmull-Rom spline: smooth curve that passes exactly through every data point.
+// fi is a fractional index into data[0..n-1]; at whole indices it returns data[i] exactly.
+inline float catmullRom(const float* d, int n, float fi) {
+	if (n <= 1) return d[0];
+	if (fi <= 0.0f) return d[0];
+	if (fi >= n - 1) return d[n - 1];
+	int i1 = static_cast<int>(fi);
+	float t = fi - i1;
+	int i0 = std::max(0, i1 - 1);
+	int i2 = std::min(n - 1, i1 + 1);
+	int i3 = std::min(n - 1, i1 + 2);
+	float p0 = d[i0], p1 = d[i1], p2 = d[i2], p3 = d[i3];
+	float t2 = t * t, t3 = t2 * t;
+	return 0.5f * ((2.0f * p1) + (-p0 + p2) * t + (2.0f * p0 - 5.0f * p1 + 4.0f * p2 - p3) * t2 + (-p0 + 3.0f * p1 - 3.0f * p2 + p3) * t3);
+}
+
+// A rain data point is "active" (drawn) if it or an immediate neighbour has rain,
+// so a run of rain is bounded by exactly one zero point on each side.
+inline bool rainActiveIdx(const float* d, int n, int i) {
+	if (i < 0 || i >= n) return false;
+	if (d[i] > 0.0f) return true;
+	if (i > 0 && d[i - 1] > 0.0f) return true;
+	if (i < n - 1 && d[i + 1] > 0.0f) return true;
+	return false;
+}
+
 void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
+	int n = dataSize;
+	int xEnd = x + (n - 1) * w / n; // pixel x of the last data point
 
-	int zeroY = y + h - static_cast<int>(((0.0f - minVal) / range) * h);
+	auto valToY = [&](float v) {
+		return y + h - static_cast<int>(((v - minVal) / range) * h);
+	};
+	auto splineYclamped = [&](int px) {
+		float fi = static_cast<float>(px - x) * n / w;
+		return std::max(y, std::min(y + h - 1, valToY(catmullRom(data, n, fi))));
+	};
+
+	int zeroY = valToY(0.0f);
 	bool zeroInRange = (zeroY >= y && zeroY <= y + h);
 
 	const int fadeDepth = 24;
 	const int fadeSteps = 8;
-	
-	for (int i = 0; i < dataSize - 1; i++) {
-		int x1 = x + i * w / dataSize;
-		int x2 = x + (i + 1) * w / dataSize;
-		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
-		
-		bool aboveZero = data[i] >= 0;
-		
-		for (int px = x1; px < x2; px++) {
-			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
-			int nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
-			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
-			
-			currentY = std::max(y, std::min(y + h - 1, currentY));
-			
-			if (aboveZero) {
-				int trailEnd = zeroInRange ? std::min(zeroY, y + h - 1) : y + h - 1;
-				trailEnd = std::min(trailEnd, currentY + fadeDepth);
-				
-				for (int py = currentY + 3; py <= trailEnd; py++) {
-					int dist = py - currentY;
-					int ditherLevel = (dist * fadeSteps) / fadeDepth;
-					if (shouldDrawPixel(px, py, ditherLevel)) {
-						display.drawPixel(px, py, GxEPD_BLACK);
-					}
-				}
-			} else {
-				int trailEnd = zeroInRange ? std::max(zeroY, y) : y;
-				trailEnd = std::max(trailEnd, currentY - fadeDepth);
-				
-				for (int py = currentY - 3; py >= trailEnd; py--) {
-					int dist = currentY - py;
-					int ditherLevel = (dist * fadeSteps) / fadeDepth;
-					if (shouldDrawPixel(px, py, ditherLevel)) {
-						display.drawPixel(px, py, GxEPD_BLACK);
-					}
-				}
+
+	// Shadow fade beneath the smooth spline
+	for (int px = x; px <= xEnd; px++) {
+		float fi = static_cast<float>(px - x) * n / w;
+		float val = catmullRom(data, n, fi);
+		int currentY = std::max(y, std::min(y + h - 1, valToY(val)));
+		bool aboveZero = val >= 0;
+
+		if (aboveZero) {
+			int trailEnd = zeroInRange ? std::min(zeroY, y + h - 1) : y + h - 1;
+			trailEnd = std::min(trailEnd, currentY + fadeDepth);
+			for (int py = currentY + 3; py <= trailEnd; py++) {
+				int dist = py - currentY;
+				int ditherLevel = (dist * fadeSteps) / fadeDepth;
+				if (shouldDrawPixel(px, py, ditherLevel)) display.drawPixel(px, py, GxEPD_BLACK);
+			}
+		} else {
+			int trailEnd = zeroInRange ? std::max(zeroY, y) : y;
+			trailEnd = std::max(trailEnd, currentY - fadeDepth);
+			for (int py = currentY - 3; py >= trailEnd; py--) {
+				int dist = currentY - py;
+				int ditherLevel = (dist * fadeSteps) / fadeDepth;
+				if (shouldDrawPixel(px, py, ditherLevel)) display.drawPixel(px, py, GxEPD_BLACK);
 			}
 		}
 	}
 
 	int firstLine = static_cast<int>(floor(minVal / 10.0f)) * 10;
 	for (int t = firstLine; t <= static_cast<int>(ceil(maxVal)); t += 10) {
-		float val = static_cast<float>(t);
-		int yy = y + h - static_cast<int>(((val - minVal) / range) * h);
+		int yy = valToY(static_cast<float>(t));
 		if (yy < y || yy > y + h) continue;
 		if (t == 0) {
 			display.drawLine(x + 1, yy - 1, x + w - 2, yy - 1, GxEPD_BLACK);
@@ -123,13 +144,14 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 		}
 	}
 
-	for (int i = 1; i < dataSize; i++) {
-		int x1 = x + (i - 1) * w / dataSize;
-		int y1 = y + h - static_cast<int>(((data[i - 1] - minVal) / range) * h);
-		int x2 = x + i * w / dataSize;
-		int y2 = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
-		for (int off = -2; off <= 2; off++) {
-			display.drawLine(x1, y1 + off, x2, y2 + off, GxEPD_BLACK);
+	// Thick smooth spline line (fill between adjacent columns so steep slopes stay solid)
+	for (int px = x; px < xEnd; px++) {
+		int y0 = splineYclamped(px);
+		int y1 = splineYclamped(px + 1);
+		int lo = std::min(y0, y1);
+		int hi = std::max(y0, y1);
+		for (int py = lo - 2; py <= hi + 2; py++) {
+			if (py >= y && py <= y + h - 1) display.drawPixel(px, py, GxEPD_BLACK);
 		}
 	}
 }
@@ -137,43 +159,58 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 void drawApparentTempLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
+	int n = dataSize;
+	int xEnd = x + (n - 1) * w / n;
 
-	for (int i = 0; i < dataSize - 1; i++) {
-		int x1 = x + i * w / dataSize;
-		int x2 = x + (i + 1) * w / dataSize;
-		int lineY = y + h - static_cast<int>(((data[i] - minVal) / range) * h);
+	auto splineYclamped = [&](int px) {
+		float fi = static_cast<float>(px - x) * n / w;
+		int yy = y + h - static_cast<int>(((catmullRom(data, n, fi) - minVal) / range) * h);
+		return std::max(y, std::min(y + h - 1, yy));
+	};
 
-		for (int px = x1; px < x2; px++) {
-			float t = static_cast<float>(px - x1) / static_cast<float>(x2 - x1);
-			int nextLineY = y + h - static_cast<int>(((data[i + 1] - minVal) / range) * h);
-			int currentY = lineY + static_cast<int>(t * (nextLineY - lineY));
-			currentY = std::max(y, std::min(y + h - 1, currentY));
+	for (int px = x; px < xEnd; px++) {
+		int y0 = splineYclamped(px);
+		int y1 = splineYclamped(px + 1);
+		int lo = std::min(y0, y1);
+		int hi = std::max(y0, y1);
 
-			// 2px dash, 2px gap pattern; draw white for gap to erase temp line
-			bool isDash = ((px - x) % 4) < 2;
-			uint16_t color = isDash ? GxEPD_BLACK : GxEPD_WHITE;
+		// 2px dash, 2px gap pattern; draw white for gap to erase what is underneath
+		bool isDash = ((px - x) % 4) < 2;
+		uint16_t color = isDash ? GxEPD_BLACK : GxEPD_WHITE;
 
-			// 2 pixels thick
-			for (int off = 0; off <= 1; off++) {
-				int py = currentY + off;
-				if (py >= y && py <= y + h - 1) {
-					display.drawPixel(px, py, color);
-				}
-			}
+		// 2 pixels thick, filling between adjacent columns so the dots stay connected on slopes
+		for (int py = lo; py <= hi + 1; py++) {
+			if (py >= y && py <= y + h - 1) display.drawPixel(px, py, color);
 		}
 	}
 }
 
-void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal) {
-	int colWidth = std::max(1, w / dataSize);
-	for (int i = 0; i < dataSize; i++) {
-		float v = data[i];
-		if (v <= 0) continue;
-		int colHeight = static_cast<int>((v / maxVal) * h);
-		if (colHeight < 1) colHeight = 1;
-		int x1 = x + i * colWidth;
-		int y1 = y + h - colHeight;
-		display.fillRect(x1, y1, colWidth - 1, colHeight, GxEPD_BLACK);
+void drawRainLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal) {
+	if (maxVal <= 0.001f) maxVal = 1.0f;
+	int n = dataSize;
+	int xEnd = x + (n - 1) * w / n;
+
+	for (int px = x; px < xEnd; px++) {
+		float fi = static_cast<float>(px - x) * n / w;
+		int i = static_cast<int>(fi);
+		if (i < 0 || i >= n - 1) continue;
+		// Draw only within an active rain region (a run of rain plus one bounding zero each side).
+		if (!(rainActiveIdx(data, n, i) && rainActiveIdx(data, n, i + 1))) continue;
+
+		float val = catmullRom(data, n, fi);
+		if (val < 0.0f) val = 0.0f;
+		int lineY = y + h - static_cast<int>((val / maxVal) * h);
+		lineY = std::max(y, std::min(y + h, lineY));
+
+		// Grey pattern fill from below the line down to the bottom of the band
+		for (int py = lineY + 3; py <= y + h; py++) {
+			if (shouldDrawPixel(px, py, 3)) display.drawPixel(px, py, GxEPD_BLACK);
+		}
+		// 3px thick smooth line
+		for (int t = 0; t < 3; t++) {
+			int py = lineY + t;
+			if (py >= y && py <= y + h) display.drawPixel(px, py, GxEPD_BLACK);
+		}
 	}
 }
 
@@ -223,7 +260,7 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 		display.print(hlabel);
 		
 		if (hour == 0 || hour == 12) {
-			display.drawLine(xx - 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
+			display.drawLine(xx - 1, tempGraphY + 1, xx - 1, lineEndY - 1, GxEPD_BLACK);
 			display.drawLine(xx, tempGraphY + 1, xx, lineEndY - 1, GxEPD_BLACK);
 			display.drawLine(xx + 1, tempGraphY + 1, xx + 1, lineEndY - 1, GxEPD_BLACK);
 		} else {
@@ -244,7 +281,7 @@ void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const 
 	display.setCursor(minLabelX, tempGraphY + graphHeight - 14);
 	display.print(minTempStr);
 
-	drawRainColumns(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, max(maxRain, 1.0f));
+	drawRainLine(display, graphX, rainY, graphWidth, rainHeight, forecastRain, forecastHours, max(maxRain, 1.0f));
 
 	display.setFont(&FreeSans18pt7b);
 	String rainStr = String(static_cast<int>(ceil(maxRain)));

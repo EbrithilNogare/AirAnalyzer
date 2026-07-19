@@ -19,4 +19,4 @@ void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const f
 
 void drawApparentTempLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal);
 
-void drawRainColumns(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal);
+void drawRainLine(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float maxVal);
