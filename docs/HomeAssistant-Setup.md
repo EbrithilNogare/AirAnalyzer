@@ -6,9 +6,9 @@ This guide explains how to set up Home Assistant to receive sensor data from you
 
 The AirAnalyzer sends the following sensor data to Home Assistant:
 
-- **temperature**: Air temperature from AHT sensor (°C)
+- **temperature**: Air temperature from SHT4x sensor (°C)
 - **temperature_esp**: ESP32 internal temperature (°C)
-- **humidity**: Relative humidity from AHT sensor (%)
+- **humidity**: Relative humidity from SHT4x sensor (%)
 - **co2**: CO₂ concentration from SCD40 sensor (ppm)
 - **pressure**: Atmospheric pressure from BMP280 sensor (hPa)
 - **battery_voltage**: Battery voltage (V)

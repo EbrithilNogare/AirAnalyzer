@@ -18,7 +18,7 @@ A DIY ESP32-based environmental monitor with an e-paper display!
 
 - ESP32-C3
 - SCD40 (CO2 sensor)
-- AHT20 (temperature & humidity)
+- SHT4x (temperature & humidity)
 - BMP280 (pressure)
 - 3.97" e-paper display
 
@@ -32,7 +32,7 @@ config:
 flowchart LR
     ESP["ESP32-C3<br>Seeed Studio"] -- "3V3 - VCC<br>GND - GND<br>GPIO 6 - SDA<br>GPIO 7 - SCL<br>BAT+ - BAT+<br>BAT- - BAT-" --- Board["Board"]
 
-    Board -- "VCC - VCC<br>GND - GND<br>SCL - SCL<br>SDA - SDA" --- SCD40["SCD40"] & AHT20["AHT20"] & BMP280["BMP280"]
+    Board -- "VCC - VCC<br>GND - GND<br>SCL - SCL<br>SDA - SDA" --- SCD40["SCD40"] & SHT4x["SHT4x"] & BMP280["BMP280"]
 
     ESP -- "GPIO 20 - Base" --- Transistor["BC327 PNP Transistor"]
     Transistor -- "Collector - VCC" --- Display["E-Paper Display"]
@@ -57,7 +57,7 @@ flowchart LR
     ESP:::controller
     Board:::board
     SCD40:::sensor
-    AHT20:::sensor
+    SHT4x:::sensor
     BMP280:::sensor
     Transistor:::transistor
     Display:::display

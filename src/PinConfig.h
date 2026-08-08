@@ -15,7 +15,7 @@
 #define EPD_SCK_PIN    8  // SPI Clock (standard ESP32C3 SPI)
 #define EPD_MOSI_PIN  10  // SPI MOSI (standard ESP32C3 SPI)
 
-// I2C pins for sensors (AHT30, SDC40)
+// I2C pins for sensors (SHT4x, SDC40)
 #define I2C_SDA_PIN    6  // I2C SDA
 #define I2C_SCL_PIN    7  // I2C SCL
 

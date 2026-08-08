@@ -9,9 +9,9 @@
 
 // Original ThingSpeak upload function
 // Data mapping:
-// field1 = tempAir (temperature from AHT sensor)
+// field1 = tempAir (temperature from SHT4x sensor)
 // field2 = tempESP (ESP32 internal temperature)
-// field3 = humidity (from AHT sensor)
+// field3 = humidity (from SHT4x sensor)
 // field4 = co2 (from SCD40 sensor)
 // field5 = pressure (from BMP280 sensor)
 // field6 = batteryVoltage

@@ -3,7 +3,7 @@
 #include <Wire.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <Adafruit_AHTX0.h>
+#include <Adafruit_SHT4x.h>
 #include <Adafruit_BMP280.h>
 #include <SensirionI2CScd4x.h>
 #include <GxEPD2_BW.h>
@@ -20,7 +20,7 @@
 
 
 DisplayType display(GxEPD2_397_GDEM0397T81(EPD_CS_PIN, EPD_DC_PIN, EPD_RST_PIN, EPD_BUSY_PIN));
-Adafruit_AHTX0 aht;
+Adafruit_SHT4x sht4;
 Adafruit_BMP280 bmp;
 SensirionI2cScd4x scd4x;
 
@@ -61,11 +61,13 @@ void initSensors() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
   delay(1);
   
-  if (!aht.begin(&Wire)) {
+  if (!sht4.begin(&Wire)) {
     #if LOGGING_ENABLED
-      Serial.println("AHT init fail");
+      Serial.println("SHT4x init fail");
     #endif
   }
+  sht4.setPrecision(SHT4X_HIGH_PRECISION);
+  sht4.setHeater(SHT4X_NO_HEATER);
   
   if (!bmp.begin(BMP280_ADDRESS_ALT)) {
       #if LOGGING_ENABLED
@@ -97,9 +99,9 @@ void readSensorBMP(){
   if(pressure > 5000 || pressure < 300) pressure = -3.0f;
 }
 
-void readSensorAHT(){
+void readSensorSHT(){
   sensors_event_t hum, temp;
-  aht.getEvent(&hum, &temp);
+  sht4.getEvent(&hum, &temp);
   tempAir = temp.temperature;
   humidity = hum.relative_humidity;
 
@@ -174,7 +176,7 @@ void readSensors() {
   readSensorBatteryVoltage();
   tempESP = temperatureRead();
   readSensorBMP();
-  readSensorAHT();
+  readSensorSHT();
   readSensorSCD();
 }
 
