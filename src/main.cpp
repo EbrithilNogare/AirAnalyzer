@@ -11,8 +11,6 @@
 #include <esp_sleep.h>
 #include <time.h>
 
-#define LOGGING_ENABLED false
-
 #include "../include/config.h"
 #include "rendering.h"
 #include "home_assistant.h"
@@ -61,12 +59,8 @@ bool shtOk = false, bmpOk = false;
 
 // Sleep the CPU while a sensor works; radios are still off at this point in the cycle so light sleep is safe
 void lightSleepMs(uint32_t ms) {
-  #if LOGGING_ENABLED
-    delay(ms);  // light sleep would drop the USB serial connection
-  #else
-    esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL);
-    esp_light_sleep_start();
-  #endif
+  esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL);
+  esp_light_sleep_start();
 }
 
 bool i2cDeviceResponds(uint8_t address) {
@@ -222,27 +216,11 @@ void waitForWiFi(int timeoutMs = 10000) {
   for (int i = 0; i < timeoutMs && WiFi.status() != WL_CONNECTED; i+=50){
     delay(50);
   }
-  
-  #if LOGGING_ENABLED
-    if (WiFi.status() == WL_CONNECTED) {
-      Serial.println("WiFi OK");
-    } else {
-      Serial.println("WiFi Failed");
-    }
-  #endif
 }
 
 void fetchWeatherForecast() {
-  if (WiFi.status() != WL_CONNECTED) {
-    #if LOGGING_ENABLED
-      Serial.println("WiFi not connected, skipping weather update");
-    #endif
-    return;
-  }
-  
-  #if LOGGING_ENABLED
-    Serial.println("Fetching weather forecast...");
-  #endif
+  if (WiFi.status() != WL_CONNECTED) return;
+
   HTTPClient http;
   http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,apparent_temperature,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
   
@@ -254,10 +232,6 @@ void fetchWeatherForecast() {
     DeserializationError error = deserializeJson(doc, payload);
     
     if (error) {
-      #if LOGGING_ENABLED
-        Serial.print("JSON parse error: ");
-        Serial.println(error.c_str());
-      #endif
       http.end();
       return;
     }
@@ -295,20 +269,8 @@ void fetchWeatherForecast() {
       sunsetShort.toCharArray(rtc_sunsetTimeStr, 6);
     }
     rtc_weatherDataValid = true;
-    #if LOGGING_ENABLED
-      Serial.println("Weather data updated successfully");
-      Serial.print("Sunrise: ");
-      Serial.print(rtc_sunriseTimeStr);
-      Serial.print(" Sunset: ");
-      Serial.println(rtc_sunsetTimeStr);
-    #endif
-  } else {
-    #if LOGGING_ENABLED
-      Serial.print("HTTP error: ");
-      Serial.println(httpCode);
-    #endif
   }
-  
+
   http.end();
 }
 
@@ -388,11 +350,6 @@ void setup() {
   rtc_elapsedUs += rtc_priorCycleDurationUs;
   rtc_priorCycleDurationUs = 0;
 
-  #if LOGGING_ENABLED
-    Serial.begin(115200);
-    while (!Serial) delay(10);
-  #endif
-
   if (rtc_bootCount == 1) {
     delay(10000); // Wait for possible upload
   }
@@ -469,12 +426,9 @@ void setup() {
   uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;
   rtc_priorCycleDurationUs = (uint64_t)millis() * 1000ULL + sleepUs;
 
-  #if LOGGING_ENABLED
-    Serial.println("Faking deep sleep for debug");
-    Serial.flush();
-    delay(sleepUs / 1000);
-    ESP.restart();
-  #endif
+  if (rtc_bootCount == 1) {
+    delay(1000); // Send data over Serial
+  }
 
   esp_sleep_enable_timer_wakeup(sleepUs);
   esp_deep_sleep_start();
