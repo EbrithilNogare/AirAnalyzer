@@ -43,10 +43,11 @@ RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed 
 RTC_DATA_ATTR uint64_t rtc_priorAwakeUs = 0;            // Previous cycle awake time (XTAL-timed, accurate)
 RTC_DATA_ATTR uint64_t rtc_priorSleepUs = 0;            // Previous cycle intended sleep duration
 
-// Measured true-seconds-per-requested-second of the deep sleep timer, learned from NTP (see calibrateSleepClock)
+// Measured true-seconds-per-requested-second of the deep sleep timer (see calibrateSleepClock)
 RTC_DATA_ATTR float rtc_clockScale = 1.0f;
 RTC_DATA_ATTR uint64_t rtc_sleepUsSinceSync = 0;
 RTC_DATA_ATTR uint64_t rtc_awakeUsSinceSync = 0;
+
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
 RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last display refresh
 RTC_DATA_ATTR uint32_t rtc_displayUpdateCount = 0;   // drives the anti-ghosting flash cadence
@@ -60,6 +61,11 @@ RTC_DATA_ATTR uint32_t rtc_wifiSubnet = 0;
 RTC_DATA_ATTR uint32_t rtc_wifiDns = 0;
 RTC_DATA_ATTR bool rtc_wifiCacheValid = false;
 RTC_DATA_ATTR uint8_t rtc_netFailStreak = 0;  // consecutive cycles where a POST never reached the server
+
+// NTP reports whole seconds, so a window this short measures the oscillator to only ~0.1%. That is
+// enough to remove most of a 2% error on the second boot; the daily syncs afterwards refine it.
+const uint64_t CALIBRATION_MIN_SLEEP_US = 900ULL * 1000000ULL;
+const uint32_t CALIBRATION_BOOTS = 2;
 
 // ################################ Moon Phase #################################
 
@@ -253,12 +259,10 @@ void cacheWiFiParams() {
   rtc_wifiCacheValid = true;
 }
 
-// A cold association costs ~1.3 s because the radio scans all 13 channels and then runs DHCP.
-// Replaying the last working BSSID, channel and lease skips both. Anything that goes wrong -
-// AP moved channel, roamed to another BSSID, lease expired - falls back to a full scan in the
-// same wake and re-learns, so the cache is self-healing and config.h stays untouched.
+// Replaying the last working BSSID, channel and lease skips the channel scan and DHCP, turning a ~1.3 s
+// association into ~300 ms. Anything that goes wrong falls back to a full scan in the same wake.
 bool connectWiFi() {
-  WiFi.persistent(false);  // the cache lives in RTC memory; no need to burn a flash write every boot
+  WiFi.persistent(false);  // the cache lives in RTC memory, no need for a flash write every boot
   applyRadioSettings();
 
   if (rtc_wifiCacheValid) {
@@ -282,12 +286,12 @@ bool connectWiFi() {
 }
 
 void disconnectWiFi() {
-  WiFi.disconnect(true, false);  // radio off, but keep the credentials the cache was learned from
+  WiFi.disconnect(true, false);
   WiFi.mode(WIFI_OFF);
 }
 
-// Start of the fetch slot `epoch` falls in. The Unix epoch is UTC-aligned, so counting whole intervals
-// from the anchor lands the slots on the configured wall-clock times regardless of daylight saving.
+// The Unix epoch is UTC-aligned, so counting whole intervals from the anchor lands the slots on the
+// configured wall-clock times.
 uint32_t currentWeatherSlot(uint32_t epoch) {
   if (epoch < WEATHER_FETCH_ANCHOR_UTC_SECONDS) return 0;
   uint32_t sinceAnchor = epoch - WEATHER_FETCH_ANCHOR_UTC_SECONDS;
@@ -345,7 +349,7 @@ void fetchWeatherForecast(uint32_t currentEpoch) {
       return;
     }
     rtc_forecastValidHours = hours;
-    // The API returns the hourly series starting at the current hour, so index 0 maps to the top of it
+    // The API returns the hourly series starting at the current hour
     rtc_forecastStartEpoch = currentEpoch - (currentEpoch % 3600UL);
     rtc_lastWeatherSlot = currentWeatherSlot(currentEpoch);
 
@@ -401,26 +405,21 @@ uint32_t getCurrentEpoch() {
   return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
 }
 
-// The deep sleep timer counts on the internal 150 kHz RC oscillator, which is only good to a couple of
-// percent, and the cycle bookkeeping assumes a sleep lasted exactly as long as it was asked to. Left
-// alone that error accumulates in one direction - up to ~29 min a day at 2% - which is enough to fire
-// the weather fetch before the model run it is waiting for has been published.
-//
-// NTP is the only real time reference on the device, so each sync measures how far the last stretch of
-// sleep actually ran and folds it into a scale factor. Subsequent sleep requests are divided by it, so
-// the wake-up grid tracks wall clock instead of sliding. Awake time is excluded because millis() comes
-// off the 40 MHz crystal and is already accurate.
+// The deep sleep timer counts on the internal RC oscillator, good to a couple of percent, and the cycle
+// bookkeeping assumes a sleep lasted exactly as long as it was asked to. That error only accumulates in
+// one direction, so NTP measures how far the last stretch of sleep really ran and the ratio divides
+// subsequent sleep requests. Awake time is excluded, millis() runs off the accurate 40 MHz crystal.
 void calibrateSleepClock(uint32_t oldNtpBase, uint32_t newEpoch) {
-  if (oldNtpBase == 0) return;                                    // nothing to compare against yet
-  if (rtc_sleepUsSinceSync < 3600ULL * 1000000ULL) return;        // too short a window to measure
+  if (oldNtpBase == 0) return;
+  if (rtc_sleepUsSinceSync < CALIBRATION_MIN_SLEEP_US) return;
 
   int64_t trueElapsedUs = ((int64_t)newEpoch - (int64_t)oldNtpBase) * 1000000LL;
   int64_t trueSleepUs = trueElapsedUs - (int64_t)rtc_awakeUsSinceSync;
   if (trueSleepUs <= 0) return;
 
-  // rtc_clockScale was already applied when those sleeps were requested, so the new estimate composes
+  // Composes, because rtc_clockScale was already applied when those sleeps were requested
   float scale = rtc_clockScale * ((float)trueSleepUs / (float)rtc_sleepUsSinceSync);
-  if (scale < 0.95f || scale > 1.05f) return;  // a bad NTP answer or lost RTC state, not a real oscillator
+  if (scale < 0.95f || scale > 1.05f) return;  // bad NTP answer or lost RTC state, not a real oscillator
 
   rtc_clockScale = scale;
 }
@@ -458,9 +457,8 @@ void haSendTask(void* param) {
   vTaskDelete(NULL);
 }
 
-// Associating is not the same as being reachable: a cached lease that the router has since handed to
-// another device still reports WL_CONNECTED while every request times out. Nothing else would ever
-// clear that, so a few silent cycles in a row drop the cache and force a fresh DHCP round.
+// Associating is not the same as being reachable: a cached lease the router has since handed to another
+// device still reports WL_CONNECTED while every request times out, and nothing else would clear it.
 void noteNetworkResult(int httpCode) {
   if (httpCode > 0) {
     rtc_netFailStreak = 0;
@@ -482,9 +480,8 @@ void setup() {
   setenv("TZ", TIMEZONE, 1);
   tzset();
 
-  // Account for elapsed time (processing + sleep) of the previous cycle. The sleep figure is the
-  // duration we intended, which is what the request was pre-compensated to produce; whatever is left
-  // over gets measured and corrected at the next NTP sync.
+  // The sleep figure is the duration we intended, which is what the request was pre-compensated to
+  // produce; the remaining error is measured and corrected at the next NTP sync.
   rtc_elapsedUs += rtc_priorAwakeUs + rtc_priorSleepUs;
   rtc_sleepUsSinceSync += rtc_priorSleepUs;
   rtc_awakeUsSinceSync += rtc_priorAwakeUs;
@@ -504,14 +501,16 @@ void setup() {
 
   bool wifiConnected = connectWiFi();
 
-  bool needsNtpSync = (rtc_ntpBaseEpoch == 0) || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
+  // The extra sync on boot 2 is what gives calibrateSleepClock its first baseline, one cycle after boot
+  // instead of one NTP_INTERVAL_SECONDS after it
+  bool needsNtpSync = (rtc_ntpBaseEpoch == 0)
+                   || (rtc_bootCount <= CALIBRATION_BOOTS)
+                   || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
   if (needsNtpSync && wifiConnected) {
     if (syncNTP()) currentEpoch = getCurrentEpoch();
   }
 
-  // Decided after the NTP sync so a corrected clock is used. The two cadences are independent: the
-  // display redraws hourly off cached data, while the forecast is only re-fetched once a new ICON-D2
-  // run is actually on the server.
+  // Decided after the NTP sync so a corrected clock is used
   bool firstRun = (rtc_bootCount == 1) || !rtc_weatherDataValid;
   bool needsDisplayUpdate = firstRun || (currentEpoch + EPSILON - rtc_lastFullUpdateEpoch >= FULL_UPDATE_SECONDS);
   bool needsWeatherFetch = firstRun || (currentWeatherSlot(currentEpoch) > rtc_lastWeatherSlot);
@@ -533,25 +532,24 @@ void setup() {
     }
   }
 
-  // Everything on the network is done here. With WIFI_PS_NONE the receiver never sleeps, so leaving
-  // the radio associated through a multi-second panel refresh was costing ~70 mA for nothing.
+  // WIFI_PS_NONE means the receiver never sleeps, so the radio has to go down before the panel refresh
+  // rather than after it
   for (int i = 0; i < 5000 && !haSendDone; i += 50) delay(50);
   if (wifiConnected) noteNetworkResult(haSendResult);
   disconnectWiFi();
 
   if (needsDisplayUpdate) {
     initDisplay1();
-    delay(100);  // the rail used to come up before the WiFi phase; it now needs its own settling time
+    delay(100);  // rail settling time, this no longer overlaps the WiFi phase
     initDisplay2();
 
-    // The flash is a whole extra full-panel refresh; the redraws in between are differential updates
     if (ANTI_GHOSTING_EVERY_N_UPDATES <= 1 || rtc_displayUpdateCount % ANTI_GHOSTING_EVERY_N_UPDATES == 0) {
       largeAntiGhosting(display);
     }
     rtc_displayUpdateCount++;
 
-    // Cached forecast can be a few hours old, so start the graph at the current hour instead of at
-    // the hour the data was fetched. The extra hours requested from the API are exactly this slack.
+    // Cached forecast can be a few hours old, so start the graph at the current hour rather than at
+    // the hour the data was fetched
     int forecastOffset = 0;
     if (rtc_forecastStartEpoch != 0 && currentEpoch > rtc_forecastStartEpoch) {
       forecastOffset = (int)((currentEpoch - rtc_forecastStartEpoch) / 3600UL);
@@ -596,8 +594,6 @@ void setup() {
   rtc_priorAwakeUs = (uint64_t)millis() * 1000ULL;
   rtc_priorSleepUs = sleepUs;
 
-  // Ask for less (or more) than we want, by however much the timer was last measured to overshoot,
-  // so the wake-up lands where wall clock says it should rather than drifting a little further each cycle
   esp_sleep_enable_timer_wakeup((uint64_t)((double)sleepUs / (double)rtc_clockScale));
   esp_deep_sleep_start();
 }

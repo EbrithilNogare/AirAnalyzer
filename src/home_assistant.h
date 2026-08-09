@@ -6,8 +6,7 @@
 #include <ArduinoJson.h>
 #include "../include/config.h"
 
-// Returns the HTTP status code, or a negative HTTPClient error. A negative result means the request
-// never reached the server, which is the signal main.cpp uses to drop a stale cached IP lease.
+// Negative return means the request never reached the server; main.cpp uses that to drop a stale lease
 int sendToHomeAssistant(float tempAir, float tempESP, float humidity, float co2, float pressure, float batteryVoltage, float tempSCD, float humiditySCD, int wifiRSSI) {
   if (WiFi.status() != WL_CONNECTED){
     return -1;
