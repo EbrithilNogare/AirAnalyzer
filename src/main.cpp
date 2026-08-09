@@ -22,26 +22,50 @@ Adafruit_SHT4x sht4;
 Adafruit_BMP280 bmp;
 SensirionI2cScd4x scd4x;
 
-const int FORECAST_HOURS = 24;
-
 float tempAir = NAN, humidity = NAN, tempESP = NAN, pressure = NAN, batteryVoltage = NAN, co2 = NAN, moonPhase = 0;
 float tempSCD = NAN, humiditySCD = NAN;
 int wifiRSSI = 0;
 
 
-RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_HOURS];
-RTC_DATA_ATTR float rtc_forecastApparentTemp[FORECAST_HOURS];
-RTC_DATA_ATTR float rtc_forecastRain[FORECAST_HOURS];
+RTC_DATA_ATTR float rtc_forecastTemp[FORECAST_FETCH_HOURS];
+RTC_DATA_ATTR float rtc_forecastApparentTemp[FORECAST_FETCH_HOURS];
+RTC_DATA_ATTR float rtc_forecastRain[FORECAST_FETCH_HOURS];
 RTC_DATA_ATTR char rtc_sunriseTimeStr[6] = "--:--";
 RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
 RTC_DATA_ATTR int rtc_forecastStartHour = 0;
+RTC_DATA_ATTR int rtc_forecastValidHours = 0;      // how many hours the last fetch actually returned
+RTC_DATA_ATTR uint32_t rtc_forecastStartEpoch = 0; // epoch of forecast index 0, used to re-align the graph on the current hour
+RTC_DATA_ATTR uint32_t rtc_lastWeatherSlot = 0;     // fetch slot whose data is already in RTC memory
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NTP sync
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
-RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
+RTC_DATA_ATTR uint64_t rtc_priorAwakeUs = 0;            // Previous cycle awake time (XTAL-timed, accurate)
+RTC_DATA_ATTR uint64_t rtc_priorSleepUs = 0;            // Previous cycle intended sleep duration
+
+// Measured true-seconds-per-requested-second of the deep sleep timer (see calibrateSleepClock)
+RTC_DATA_ATTR float rtc_clockScale = 1.0f;
+RTC_DATA_ATTR uint64_t rtc_sleepUsSinceSync = 0;
+RTC_DATA_ATTR uint64_t rtc_awakeUsSinceSync = 0;
+
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
-RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last weather fetch + display refresh
+RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last display refresh
+RTC_DATA_ATTR uint32_t rtc_displayUpdateCount = 0;   // drives the anti-ghosting flash cadence
+
+// Last known-good association, replayed on the next wake to skip the channel scan and DHCP
+RTC_DATA_ATTR uint8_t rtc_wifiBssid[6] = {0};
+RTC_DATA_ATTR uint8_t rtc_wifiChannel = 0;
+RTC_DATA_ATTR uint32_t rtc_wifiIp = 0;
+RTC_DATA_ATTR uint32_t rtc_wifiGateway = 0;
+RTC_DATA_ATTR uint32_t rtc_wifiSubnet = 0;
+RTC_DATA_ATTR uint32_t rtc_wifiDns = 0;
+RTC_DATA_ATTR bool rtc_wifiCacheValid = false;
+RTC_DATA_ATTR uint8_t rtc_netFailStreak = 0;  // consecutive cycles where a POST never reached the server
+
+// NTP reports whole seconds, so a window this short measures the oscillator to only ~0.1%. That is
+// enough to remove most of a 2% error on the second boot; the daily syncs afterwards refine it.
+const uint64_t CALIBRATION_MIN_SLEEP_US = 900ULL * 1000000ULL;
+const uint32_t CALIBRATION_BOOTS = 2;
 
 // ################################ Moon Phase #################################
 
@@ -205,25 +229,87 @@ void readSensors() {
 
 // ############################### Internet ####################################
 
-void connectWiFi() {
-  WiFi.mode(WIFI_STA);
-  WiFi.setTxPower(WIFI_POWER_5dBm);
-  WiFi.setSleep(WIFI_PS_NONE);
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-}
+const int WIFI_FAST_TIMEOUT_MS = 4000;   // a replayed association normally completes in ~300 ms
+const int WIFI_FULL_TIMEOUT_MS = 10000;
 
-void waitForWiFi(int timeoutMs = 10000) {
+bool waitForWiFi(int timeoutMs) {
   for (int i = 0; i < timeoutMs && WiFi.status() != WL_CONNECTED; i+=50){
     delay(50);
   }
+  return WiFi.status() == WL_CONNECTED;
 }
 
-void fetchWeatherForecast() {
+void applyRadioSettings() {
+  WiFi.mode(WIFI_STA);
+  WiFi.setTxPower(WIFI_POWER_5dBm);
+  WiFi.setSleep(WIFI_PS_NONE);
+}
+
+void cacheWiFiParams() {
+  const uint8_t* bssid = WiFi.BSSID();
+  uint32_t ip = (uint32_t)WiFi.localIP();
+  if (bssid == nullptr || ip == 0 || WiFi.channel() == 0) return;
+
+  memcpy(rtc_wifiBssid, bssid, sizeof(rtc_wifiBssid));
+  rtc_wifiChannel = (uint8_t)WiFi.channel();
+  rtc_wifiIp = ip;
+  rtc_wifiGateway = (uint32_t)WiFi.gatewayIP();
+  rtc_wifiSubnet = (uint32_t)WiFi.subnetMask();
+  rtc_wifiDns = (uint32_t)WiFi.dnsIP();
+  rtc_wifiCacheValid = true;
+}
+
+// Replaying the last working BSSID, channel and lease skips the channel scan and DHCP, turning a ~1.3 s
+// association into ~300 ms. Anything that goes wrong falls back to a full scan in the same wake.
+bool connectWiFi() {
+  WiFi.persistent(false);  // the cache lives in RTC memory, no need for a flash write every boot
+  applyRadioSettings();
+
+  if (rtc_wifiCacheValid) {
+    WiFi.config(IPAddress(rtc_wifiIp), IPAddress(rtc_wifiGateway), IPAddress(rtc_wifiSubnet), IPAddress(rtc_wifiDns));
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD, rtc_wifiChannel, rtc_wifiBssid);
+    if (waitForWiFi(WIFI_FAST_TIMEOUT_MS)) return true;
+
+    rtc_wifiCacheValid = false;
+    WiFi.disconnect(true);
+    delay(10);
+    applyRadioSettings();
+  }
+
+  const IPAddress unset((uint32_t)0);
+  WiFi.config(unset, unset, unset, unset);  // a zeroed config is what the core reads as "use DHCP"
+  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+  if (!waitForWiFi(WIFI_FULL_TIMEOUT_MS)) return false;
+
+  cacheWiFiParams();
+  return true;
+}
+
+void disconnectWiFi() {
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_OFF);
+}
+
+// The Unix epoch is UTC-aligned, so counting whole intervals from the anchor lands the slots on the
+// configured wall-clock times.
+uint32_t currentWeatherSlot(uint32_t epoch) {
+  if (epoch < WEATHER_FETCH_ANCHOR_UTC_SECONDS) return 0;
+  uint32_t sinceAnchor = epoch - WEATHER_FETCH_ANCHOR_UTC_SECONDS;
+  return (sinceAnchor / WEATHER_FETCH_INTERVAL_SECONDS) * WEATHER_FETCH_INTERVAL_SECONDS
+         + WEATHER_FETCH_ANCHOR_UTC_SECONDS;
+}
+
+void fetchWeatherForecast(uint32_t currentEpoch) {
   if (WiFi.status() != WL_CONNECTED) return;
 
+  String url = String("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998"
+                      "&timezone=Europe%2FBerlin&forecast_days=2"
+                      "&hourly=temperature_2m,apparent_temperature,rain,snowfall"
+                      "&daily=sunset,sunrise&models=icon_d2&forecast_hours=") + FORECAST_FETCH_HOURS;
+
   HTTPClient http;
-  http.begin("https://api.open-meteo.com/v1/forecast?latitude=50.06&longitude=14.419998&timezone=Europe%2FBerlin&forecast_days=1&hourly=temperature_2m,apparent_temperature,rain,snowfall&daily=sunset,sunrise&forecast_hours=24&models=icon_d2");
-  
+  http.begin(url);
+
   int httpCode = http.GET();
   if (httpCode == 200) {
     String payload = http.getString();
@@ -247,16 +333,26 @@ void fetchWeatherForecast() {
       String firstTime = timeArray[0].as<String>();
       rtc_forecastStartHour = firstTime.substring(11, 13).toInt();
     }
-    
-    for (int i = 0; i < FORECAST_HOURS && i < tempArray.size(); i++) {
+
+    int hours = 0;
+    for (int i = 0; i < FORECAST_FETCH_HOURS && i < (int)tempArray.size(); i++) {
       rtc_forecastTemp[i] = tempArray[i];
       rtc_forecastApparentTemp[i] = apparentTempArray[i] | rtc_forecastTemp[i];
       // Combine rain and snowfall (snowfall in cm, convert to mm equivalent)
       float rain = rainArray[i] | 0.0f;
       float snow = snowArray[i] | 0.0f;
       rtc_forecastRain[i] = rain + (snow * 10.0f);  // 1cm snow ≈ 10mm water
+      hours++;
     }
-    
+    if (hours == 0) {
+      http.end();
+      return;
+    }
+    rtc_forecastValidHours = hours;
+    // The API returns the hourly series starting at the current hour
+    rtc_forecastStartEpoch = currentEpoch - (currentEpoch % 3600UL);
+    rtc_lastWeatherSlot = currentWeatherSlot(currentEpoch);
+
     // Parse sunrise and sunset times
     if (doc["daily"]["sunrise"][0]) {
       String sunriseStr = doc["daily"]["sunrise"][0].as<String>();
@@ -309,6 +405,25 @@ uint32_t getCurrentEpoch() {
   return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
 }
 
+// The deep sleep timer counts on the internal RC oscillator, good to a couple of percent, and the cycle
+// bookkeeping assumes a sleep lasted exactly as long as it was asked to. That error only accumulates in
+// one direction, so NTP measures how far the last stretch of sleep really ran and the ratio divides
+// subsequent sleep requests. Awake time is excluded, millis() runs off the accurate 40 MHz crystal.
+void calibrateSleepClock(uint32_t oldNtpBase, uint32_t newEpoch) {
+  if (oldNtpBase == 0) return;
+  if (rtc_sleepUsSinceSync < CALIBRATION_MIN_SLEEP_US) return;
+
+  int64_t trueElapsedUs = ((int64_t)newEpoch - (int64_t)oldNtpBase) * 1000000LL;
+  int64_t trueSleepUs = trueElapsedUs - (int64_t)rtc_awakeUsSinceSync;
+  if (trueSleepUs <= 0) return;
+
+  // Composes, because rtc_clockScale was already applied when those sleeps were requested
+  float scale = rtc_clockScale * ((float)trueSleepUs / (float)rtc_sleepUsSinceSync);
+  if (scale < 0.95f || scale > 1.05f) return;  // bad NTP answer or lost RTC state, not a real oscillator
+
+  rtc_clockScale = scale;
+}
+
 bool syncNTP() {
   uint32_t oldEpoch = getCurrentEpoch();
 
@@ -318,6 +433,10 @@ bool syncNTP() {
 
   uint32_t newEpoch = (uint32_t)mktime(&timeinfo);
   int32_t timeDrift = rtc_ntpBaseEpoch == 0 ? 0 : (int32_t)(newEpoch - oldEpoch);
+
+  calibrateSleepClock(rtc_ntpBaseEpoch, newEpoch);
+  rtc_sleepUsSinceSync = 0;
+  rtc_awakeUsSinceSync = 0;
 
   rtc_ntpBaseEpoch = newEpoch;
   rtc_elapsedUs = 0;
@@ -330,11 +449,26 @@ bool syncNTP() {
 // ####################### Home Assistant task ###############################
 
 volatile bool haSendDone = false;
+volatile int haSendResult = 0;
 
 void haSendTask(void* param) {
-  sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+  haSendResult = sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
   haSendDone = true;
   vTaskDelete(NULL);
+}
+
+// Associating is not the same as being reachable: a cached lease the router has since handed to another
+// device still reports WL_CONNECTED while every request times out, and nothing else would clear it.
+void noteNetworkResult(int httpCode) {
+  if (httpCode > 0) {
+    rtc_netFailStreak = 0;
+    return;
+  }
+  if (rtc_netFailStreak < 255) rtc_netFailStreak++;
+  if (rtc_netFailStreak >= 3) {
+    rtc_wifiCacheValid = false;
+    rtc_netFailStreak = 0;
+  }
 }
 
 // ################################ Setup ####################################
@@ -346,9 +480,13 @@ void setup() {
   setenv("TZ", TIMEZONE, 1);
   tzset();
 
-  // Account for elapsed time (processing + sleep) of the previous cycle
-  rtc_elapsedUs += rtc_priorCycleDurationUs;
-  rtc_priorCycleDurationUs = 0;
+  // The sleep figure is the duration we intended, which is what the request was pre-compensated to
+  // produce; the remaining error is measured and corrected at the next NTP sync.
+  rtc_elapsedUs += rtc_priorAwakeUs + rtc_priorSleepUs;
+  rtc_sleepUsSinceSync += rtc_priorSleepUs;
+  rtc_awakeUsSinceSync += rtc_priorAwakeUs;
+  rtc_priorAwakeUs = 0;
+  rtc_priorSleepUs = 0;
 
   if (rtc_bootCount == 1) {
     delay(10000); // Wait for possible upload
@@ -357,41 +495,69 @@ void setup() {
   uint32_t currentEpoch = getCurrentEpoch();
   const uint32_t EPSILON = 10;  // 10 s tolerance for timer imprecision
 
-  // Data send happens every wake; weather fetch + display refresh only every FULL_UPDATE_SECONDS
-  bool needsFullUpdate = (rtc_bootCount == 1) || !rtc_weatherDataValid || (currentEpoch + EPSILON - rtc_lastFullUpdateEpoch >= FULL_UPDATE_SECONDS);
-
   // Measure everything before WiFi turns on, so radio current peaks can't disturb the readings (battery voltage especially)
   initSensors();
   readSensors();
 
-  if (needsFullUpdate) initDisplay1();
-  connectWiFi();
-  waitForWiFi();
+  bool wifiConnected = connectWiFi();
 
-  bool needsNtpSync = (rtc_ntpBaseEpoch == 0) || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
-  if (needsNtpSync && WiFi.status() == WL_CONNECTED) {
+  // The extra sync on boot 2 is what gives calibrateSleepClock its first baseline, one cycle after boot
+  // instead of one NTP_INTERVAL_SECONDS after it
+  bool needsNtpSync = (rtc_ntpBaseEpoch == 0)
+                   || (rtc_bootCount <= CALIBRATION_BOOTS)
+                   || (currentEpoch - rtc_ntpBaseEpoch >= NTP_INTERVAL_SECONDS);
+  if (needsNtpSync && wifiConnected) {
     if (syncNTP()) currentEpoch = getCurrentEpoch();
   }
 
+  // Decided after the NTP sync so a corrected clock is used
+  bool firstRun = (rtc_bootCount == 1) || !rtc_weatherDataValid;
+  bool needsDisplayUpdate = firstRun || (currentEpoch + EPSILON - rtc_lastFullUpdateEpoch >= FULL_UPDATE_SECONDS);
+  bool needsWeatherFetch = firstRun || (currentWeatherSlot(currentEpoch) > rtc_lastWeatherSlot);
+
   haSendDone = true;
-  if (WiFi.status() == WL_CONNECTED) {
+  haSendResult = 0;
+  if (wifiConnected) {
     wifiRSSI = WiFi.RSSI();
-    if (needsFullUpdate) {
+    if (needsWeatherFetch) {
       // Send to Home Assistant in parallel with the weather fetch
       haSendDone = false;
       if (xTaskCreate(haSendTask, "haSend", 8192, NULL, 1, NULL) != pdPASS) {
-        sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+        haSendResult = sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
         haSendDone = true;
       }
-      fetchWeatherForecast();
+      fetchWeatherForecast(currentEpoch);
     } else {
-      sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
+      haSendResult = sendToHomeAssistant(tempAir, tempESP, humidity, co2, pressure, batteryVoltage, tempSCD, humiditySCD, wifiRSSI);
     }
   }
 
-  if (needsFullUpdate) {
+  // WIFI_PS_NONE means the receiver never sleeps, so the radio has to go down before the panel refresh
+  // rather than after it
+  for (int i = 0; i < 5000 && !haSendDone; i += 50) delay(50);
+  if (wifiConnected) noteNetworkResult(haSendResult);
+  disconnectWiFi();
+
+  if (needsDisplayUpdate) {
+    initDisplay1();
+    delay(100);  // rail settling time, this no longer overlaps the WiFi phase
     initDisplay2();
-    largeAntiGhosting(display);
+
+    if (ANTI_GHOSTING_EVERY_N_UPDATES <= 1 || rtc_displayUpdateCount % ANTI_GHOSTING_EVERY_N_UPDATES == 0) {
+      largeAntiGhosting(display);
+    }
+    rtc_displayUpdateCount++;
+
+    // Cached forecast can be a few hours old, so start the graph at the current hour rather than at
+    // the hour the data was fetched
+    int forecastOffset = 0;
+    if (rtc_forecastStartEpoch != 0 && currentEpoch > rtc_forecastStartEpoch) {
+      forecastOffset = (int)((currentEpoch - rtc_forecastStartEpoch) / 3600UL);
+    }
+    int maxOffset = max(rtc_forecastValidHours - FORECAST_DISPLAY_HOURS, 0);
+    forecastOffset = constrain(forecastOffset, 0, maxOffset);
+    int forecastHours = min(FORECAST_DISPLAY_HOURS, rtc_forecastValidHours - forecastOffset);
+
     getMoonPhase(currentEpoch);
     rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
     updateDisplay(
@@ -402,35 +568,33 @@ void setup() {
       pressure,
       rtc_sunriseTimeStr,
       rtc_sunsetTimeStr,
-      rtc_forecastTemp,
-      rtc_forecastApparentTemp,
-      rtc_forecastRain,
-      FORECAST_HOURS,
-      rtc_forecastStartHour,
-      rtc_weatherDataValid,
+      rtc_forecastTemp + forecastOffset,
+      rtc_forecastApparentTemp + forecastOffset,
+      rtc_forecastRain + forecastOffset,
+      forecastHours,
+      (rtc_forecastStartHour + forecastOffset) % 24,
+      rtc_weatherDataValid && forecastHours > 0,
       moonPhase,
       rtc_batteryPercent
     );
     rtc_lastFullUpdateEpoch = currentEpoch;
+
+    turnOffDisplay();
   }
-
-  // The HA send task usually finished during the display refresh — wait out any remainder before dropping WiFi
-  for (int i = 0; i < 5000 && !haSendDone; i += 50) delay(50);
-  WiFi.disconnect(true);
-
-  if (needsFullUpdate) turnOffDisplay();
 
   // Sleep the remainder of the cycle so wake-ups stay on a CYCLE_SECONDS cadence
   int32_t sleepSeconds = min(max((int32_t)CYCLE_SECONDS - (int32_t)(millis() / 1000), (int32_t)30), (int32_t)3600);
 
   uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;
-  rtc_priorCycleDurationUs = (uint64_t)millis() * 1000ULL + sleepUs;
 
   if (rtc_bootCount == 1) {
     delay(1000); // Send data over Serial
   }
 
-  esp_sleep_enable_timer_wakeup(sleepUs);
+  rtc_priorAwakeUs = (uint64_t)millis() * 1000ULL;
+  rtc_priorSleepUs = sleepUs;
+
+  esp_sleep_enable_timer_wakeup((uint64_t)((double)sleepUs / (double)rtc_clockScale));
   esp_deep_sleep_start();
 }
 

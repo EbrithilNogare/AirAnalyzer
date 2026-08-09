@@ -6,9 +6,10 @@
 #include <ArduinoJson.h>
 #include "../include/config.h"
 
-void sendToHomeAssistant(float tempAir, float tempESP, float humidity, float co2, float pressure, float batteryVoltage, float tempSCD, float humiditySCD, int wifiRSSI) {
+// Negative return means the request never reached the server; main.cpp uses that to drop a stale lease
+int sendToHomeAssistant(float tempAir, float tempESP, float humidity, float co2, float pressure, float batteryVoltage, float tempSCD, float humiditySCD, int wifiRSSI) {
   if (WiFi.status() != WL_CONNECTED){
-    return;
+    return -1;
   }
 
   JsonDocument doc;
@@ -29,6 +30,7 @@ HTTPClient http;
   http.begin(HA_WEBHOOK_URL);
   http.addHeader("Content-Type", "application/json");
   http.setTimeout(1000);
-  http.POST(jsonString);
+  int code = http.POST(jsonString);
   http.end();
+  return code;
 }
