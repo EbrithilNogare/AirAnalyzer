@@ -35,12 +35,18 @@ RTC_DATA_ATTR char rtc_sunsetTimeStr[6] = "--:--";
 RTC_DATA_ATTR int rtc_forecastStartHour = 0;
 RTC_DATA_ATTR int rtc_forecastValidHours = 0;      // how many hours the last fetch actually returned
 RTC_DATA_ATTR uint32_t rtc_forecastStartEpoch = 0; // epoch of forecast index 0, used to re-align the graph on the current hour
-RTC_DATA_ATTR uint32_t rtc_lastWeatherRunEpoch = 0;  // reference time of the ICON-D2 run already fetched
+RTC_DATA_ATTR uint32_t rtc_lastWeatherSlot = 0;     // fetch slot whose data is already in RTC memory
 RTC_DATA_ATTR bool rtc_weatherDataValid = false;
 RTC_DATA_ATTR uint32_t rtc_bootCount = 0;
 RTC_DATA_ATTR uint32_t rtc_ntpBaseEpoch = 0;            // Unix epoch at last NTP sync
 RTC_DATA_ATTR uint64_t rtc_elapsedUs = 0;               // Microseconds elapsed since NTP sync
-RTC_DATA_ATTR uint64_t rtc_priorCycleDurationUs = 0;    // Previous cycle total duration (processing + sleep)
+RTC_DATA_ATTR uint64_t rtc_priorAwakeUs = 0;            // Previous cycle awake time (XTAL-timed, accurate)
+RTC_DATA_ATTR uint64_t rtc_priorSleepUs = 0;            // Previous cycle intended sleep duration
+
+// Measured true-seconds-per-requested-second of the deep sleep timer, learned from NTP (see calibrateSleepClock)
+RTC_DATA_ATTR float rtc_clockScale = 1.0f;
+RTC_DATA_ATTR uint64_t rtc_sleepUsSinceSync = 0;
+RTC_DATA_ATTR uint64_t rtc_awakeUsSinceSync = 0;
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
 RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last display refresh
 RTC_DATA_ATTR uint32_t rtc_displayUpdateCount = 0;   // drives the anti-ghosting flash cadence
@@ -280,13 +286,13 @@ void disconnectWiFi() {
   WiFi.mode(WIFI_OFF);
 }
 
-// Reference time of the newest ICON-D2 run Open-Meteo should already be serving at `epoch`.
-// Runs sit on a fixed 3 h UTC grid and the Unix epoch is UTC-aligned, so plain integer division
-// lands exactly on 00/03/06/... UTC.
-uint32_t latestAvailableWeatherRun(uint32_t epoch) {
-  uint32_t ready = WEATHER_RUN_AVAILABILITY_SECONDS + WEATHER_FETCH_MARGIN_SECONDS;
-  if (epoch < ready) return 0;
-  return ((epoch - ready) / WEATHER_RUN_INTERVAL_SECONDS) * WEATHER_RUN_INTERVAL_SECONDS;
+// Start of the fetch slot `epoch` falls in. The Unix epoch is UTC-aligned, so counting whole intervals
+// from the anchor lands the slots on the configured wall-clock times regardless of daylight saving.
+uint32_t currentWeatherSlot(uint32_t epoch) {
+  if (epoch < WEATHER_FETCH_ANCHOR_UTC_SECONDS) return 0;
+  uint32_t sinceAnchor = epoch - WEATHER_FETCH_ANCHOR_UTC_SECONDS;
+  return (sinceAnchor / WEATHER_FETCH_INTERVAL_SECONDS) * WEATHER_FETCH_INTERVAL_SECONDS
+         + WEATHER_FETCH_ANCHOR_UTC_SECONDS;
 }
 
 void fetchWeatherForecast(uint32_t currentEpoch) {
@@ -341,7 +347,7 @@ void fetchWeatherForecast(uint32_t currentEpoch) {
     rtc_forecastValidHours = hours;
     // The API returns the hourly series starting at the current hour, so index 0 maps to the top of it
     rtc_forecastStartEpoch = currentEpoch - (currentEpoch % 3600UL);
-    rtc_lastWeatherRunEpoch = latestAvailableWeatherRun(currentEpoch);
+    rtc_lastWeatherSlot = currentWeatherSlot(currentEpoch);
 
     // Parse sunrise and sunset times
     if (doc["daily"]["sunrise"][0]) {
@@ -395,6 +401,30 @@ uint32_t getCurrentEpoch() {
   return rtc_ntpBaseEpoch + (uint32_t)(rtc_elapsedUs / 1000000ULL);
 }
 
+// The deep sleep timer counts on the internal 150 kHz RC oscillator, which is only good to a couple of
+// percent, and the cycle bookkeeping assumes a sleep lasted exactly as long as it was asked to. Left
+// alone that error accumulates in one direction - up to ~29 min a day at 2% - which is enough to fire
+// the weather fetch before the model run it is waiting for has been published.
+//
+// NTP is the only real time reference on the device, so each sync measures how far the last stretch of
+// sleep actually ran and folds it into a scale factor. Subsequent sleep requests are divided by it, so
+// the wake-up grid tracks wall clock instead of sliding. Awake time is excluded because millis() comes
+// off the 40 MHz crystal and is already accurate.
+void calibrateSleepClock(uint32_t oldNtpBase, uint32_t newEpoch) {
+  if (oldNtpBase == 0) return;                                    // nothing to compare against yet
+  if (rtc_sleepUsSinceSync < 3600ULL * 1000000ULL) return;        // too short a window to measure
+
+  int64_t trueElapsedUs = ((int64_t)newEpoch - (int64_t)oldNtpBase) * 1000000LL;
+  int64_t trueSleepUs = trueElapsedUs - (int64_t)rtc_awakeUsSinceSync;
+  if (trueSleepUs <= 0) return;
+
+  // rtc_clockScale was already applied when those sleeps were requested, so the new estimate composes
+  float scale = rtc_clockScale * ((float)trueSleepUs / (float)rtc_sleepUsSinceSync);
+  if (scale < 0.95f || scale > 1.05f) return;  // a bad NTP answer or lost RTC state, not a real oscillator
+
+  rtc_clockScale = scale;
+}
+
 bool syncNTP() {
   uint32_t oldEpoch = getCurrentEpoch();
 
@@ -404,6 +434,10 @@ bool syncNTP() {
 
   uint32_t newEpoch = (uint32_t)mktime(&timeinfo);
   int32_t timeDrift = rtc_ntpBaseEpoch == 0 ? 0 : (int32_t)(newEpoch - oldEpoch);
+
+  calibrateSleepClock(rtc_ntpBaseEpoch, newEpoch);
+  rtc_sleepUsSinceSync = 0;
+  rtc_awakeUsSinceSync = 0;
 
   rtc_ntpBaseEpoch = newEpoch;
   rtc_elapsedUs = 0;
@@ -448,9 +482,14 @@ void setup() {
   setenv("TZ", TIMEZONE, 1);
   tzset();
 
-  // Account for elapsed time (processing + sleep) of the previous cycle
-  rtc_elapsedUs += rtc_priorCycleDurationUs;
-  rtc_priorCycleDurationUs = 0;
+  // Account for elapsed time (processing + sleep) of the previous cycle. The sleep figure is the
+  // duration we intended, which is what the request was pre-compensated to produce; whatever is left
+  // over gets measured and corrected at the next NTP sync.
+  rtc_elapsedUs += rtc_priorAwakeUs + rtc_priorSleepUs;
+  rtc_sleepUsSinceSync += rtc_priorSleepUs;
+  rtc_awakeUsSinceSync += rtc_priorAwakeUs;
+  rtc_priorAwakeUs = 0;
+  rtc_priorSleepUs = 0;
 
   if (rtc_bootCount == 1) {
     delay(10000); // Wait for possible upload
@@ -475,7 +514,7 @@ void setup() {
   // run is actually on the server.
   bool firstRun = (rtc_bootCount == 1) || !rtc_weatherDataValid;
   bool needsDisplayUpdate = firstRun || (currentEpoch + EPSILON - rtc_lastFullUpdateEpoch >= FULL_UPDATE_SECONDS);
-  bool needsWeatherFetch = firstRun || (latestAvailableWeatherRun(currentEpoch) > rtc_lastWeatherRunEpoch);
+  bool needsWeatherFetch = firstRun || (currentWeatherSlot(currentEpoch) > rtc_lastWeatherSlot);
 
   haSendDone = true;
   haSendResult = 0;
@@ -549,13 +588,17 @@ void setup() {
   int32_t sleepSeconds = min(max((int32_t)CYCLE_SECONDS - (int32_t)(millis() / 1000), (int32_t)30), (int32_t)3600);
 
   uint64_t sleepUs = (uint64_t)sleepSeconds * 1000000ULL;
-  rtc_priorCycleDurationUs = (uint64_t)millis() * 1000ULL + sleepUs;
 
   if (rtc_bootCount == 1) {
     delay(1000); // Send data over Serial
   }
 
-  esp_sleep_enable_timer_wakeup(sleepUs);
+  rtc_priorAwakeUs = (uint64_t)millis() * 1000ULL;
+  rtc_priorSleepUs = sleepUs;
+
+  // Ask for less (or more) than we want, by however much the timer was last measured to overshoot,
+  // so the wake-up lands where wall clock says it should rather than drifting a little further each cycle
+  esp_sleep_enable_timer_wakeup((uint64_t)((double)sleepUs / (double)rtc_clockScale));
   esp_deep_sleep_start();
 }
 
