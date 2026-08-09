@@ -85,14 +85,18 @@ inline bool rainActiveIdx(const float* d, int n, int i) {
 	return false;
 }
 
+// Bottom padding of the temperature plot: keeps the lowest point high enough that the shadow fade (3 px gap + fadeDepth) below it isn't clipped at the graph edge.
+const int tempGraphBottomPad = 27;
+
 void drawForecastGraph(DisplayType& display, int x, int y, int w, int h, const float* data, int dataSize, float minVal, float maxVal) {
 	float range = maxVal - minVal;
 	if (range <= 0.001f) range = 1.0f;
 	int n = dataSize;
 	int xEnd = x + (n - 1) * w / n; // pixel x of the last data point
+	int plotH = h - tempGraphBottomPad;
 
 	auto valToY = [&](float v) {
-		return y + h - static_cast<int>(((v - minVal) / range) * h);
+		return y + plotH - static_cast<int>(((v - minVal) / range) * plotH);
 	};
 	auto splineYclamped = [&](int px) {
 		float fi = static_cast<float>(px - x) * n / w;
@@ -161,10 +165,11 @@ void drawApparentTempLine(DisplayType& display, int x, int y, int w, int h, cons
 	if (range <= 0.001f) range = 1.0f;
 	int n = dataSize;
 	int xEnd = x + (n - 1) * w / n;
+	int plotH = h - tempGraphBottomPad; // same mapping as drawForecastGraph so both lines stay aligned
 
 	auto splineYclamped = [&](int px) {
 		float fi = static_cast<float>(px - x) * n / w;
-		int yy = y + h - static_cast<int>(((catmullRom(data, n, fi) - minVal) / range) * h);
+		int yy = y + plotH - static_cast<int>(((catmullRom(data, n, fi) - minVal) / range) * plotH);
 		return std::max(y, std::min(y + h - 1, yy));
 	};
 

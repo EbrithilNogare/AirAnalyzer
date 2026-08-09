@@ -30,7 +30,7 @@ alias: AirAnalyzer Data Receiver
 description: Receives sensor data from AirAnalyzer device
 trigger:
   - platform: webhook
-    webhook_id: air_analyzer
+    webhook_id: air_analyzer # use real id, as it is as password
     allowed_methods:
       - POST
     local_only: true
@@ -69,62 +69,58 @@ template:
         unit_of_measurement: "°C"
         device_class: temperature
         state_class: measurement
-
       - name: "Air Analyzer Humidity"
         unique_id: air_analyzer_humidity
         state: "{{ trigger.event.data.humidity }}"
         unit_of_measurement: "%"
         device_class: humidity
         state_class: measurement
-
       - name: "Air Analyzer CO₂"
         unique_id: air_analyzer_co2
         state: "{{ trigger.event.data.co2 }}"
         unit_of_measurement: "ppm"
         device_class: carbon_dioxide
         state_class: measurement
-
       - name: "Air Analyzer Pressure"
         unique_id: air_analyzer_pressure
         state: "{{ trigger.event.data.pressure }}"
         unit_of_measurement: "hPa"
         device_class: atmospheric_pressure
         state_class: measurement
-
       - name: "Air Analyzer Battery"
         unique_id: air_analyzer_battery
         state: "{{ trigger.event.data.battery_voltage }}"
         unit_of_measurement: "V"
         device_class: voltage
         state_class: measurement
-
       - name: "Air Analyzer ESP Temperature"
         unique_id: air_analyzer_esp_temperature
         state: "{{ trigger.event.data.temperature_esp }}"
         unit_of_measurement: "°C"
         device_class: temperature
         state_class: measurement
-
       - name: "Air Analyzer SCD Temperature"
         unique_id: air_analyzer_scd_temperature
         state: "{{ trigger.event.data.temperature_scd }}"
         unit_of_measurement: "°C"
         device_class: temperature
         state_class: measurement
-
       - name: "Air Analyzer SCD Humidity"
         unique_id: air_analyzer_scd_humidity
         state: "{{ trigger.event.data.humidity_scd }}"
         unit_of_measurement: "%"
         device_class: humidity
         state_class: measurement
-
       - name: "Air Analyzer WiFi RSSI"
         unique_id: air_analyzer_wifi_rssi
         state: "{{ trigger.event.data.wifi_rssi }}"
         unit_of_measurement: "dBm"
         device_class: signal_strength
         state_class: measurement
+      - name: "Air Analyzer Last Seen"
+        unique_id: air_analyzer_last_seen
+        device_class: timestamp
+        state: "{{ now() }}"
 ```
 
 After adding this, restart Home Assistant.
