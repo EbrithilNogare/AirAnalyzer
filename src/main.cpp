@@ -26,8 +26,8 @@ SensirionI2cScd4x scd4x;
 
 const int FORECAST_HOURS = 24;
 
-float tempAir = 0, humidity = 0, tempESP = 0, pressure = 1000, batteryVoltage = 0, co2 = 0, moonPhase = 0;
-float tempSCD = 0, humiditySCD = 0;
+float tempAir = NAN, humidity = NAN, tempESP = NAN, pressure = NAN, batteryVoltage = NAN, co2 = NAN, moonPhase = 0;
+float tempSCD = NAN, humiditySCD = NAN;
 int wifiRSSI = 0;
 
 
@@ -57,111 +57,139 @@ void getMoonPhase(uint32_t epochTime) {
 
 // ################################ Sensors ####################################
 
+bool shtOk = false, bmpOk = false;
+
+// Sleep the CPU while a sensor works; radios are still off at this point in the cycle so light sleep is safe
+void lightSleepMs(uint32_t ms) {
+  #if LOGGING_ENABLED
+    delay(ms);  // light sleep would drop the USB serial connection
+  #else
+    esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL);
+    esp_light_sleep_start();
+  #endif
+}
+
+bool i2cDeviceResponds(uint8_t address) {
+  Wire.beginTransmission(address);
+  return Wire.endTransmission() == 0;
+}
+
+// A slave interrupted mid-transfer (brownout, reset) can hold SDA low forever; no ESP reset fixes that, only clocking the stale bits out
+void recoverI2CBus() {
+  Wire.end();
+  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
+  pinMode(I2C_SCL_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SCL_PIN, HIGH);
+  for (int i = 0; i < 9 && digitalRead(I2C_SDA_PIN) == LOW; i++) {
+    digitalWrite(I2C_SCL_PIN, LOW);
+    delayMicroseconds(5);
+    digitalWrite(I2C_SCL_PIN, HIGH);
+    delayMicroseconds(5);
+  }
+  pinMode(I2C_SDA_PIN, OUTPUT_OPEN_DRAIN);
+  digitalWrite(I2C_SDA_PIN, LOW);
+  delayMicroseconds(5);
+  digitalWrite(I2C_SDA_PIN, HIGH);  // STOP condition (SDA low->high while SCL high) releases the bus
+  delayMicroseconds(5);
+  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
+  delay(2);
+}
+
 void initSensors() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
-  delay(1);
-  
-  if (!sht4.begin(&Wire)) {
-    #if LOGGING_ENABLED
-      Serial.println("SHT4x init fail");
-    #endif
+  delay(2);
+
+  if (!i2cDeviceResponds(SHT4x_DEFAULT_ADDR)) recoverI2CBus();
+
+  shtOk = sht4.begin(&Wire);
+  if (!shtOk) {
+    recoverI2CBus();
+    shtOk = sht4.begin(&Wire);
   }
-  sht4.setPrecision(SHT4X_HIGH_PRECISION);
-  sht4.setHeater(SHT4X_NO_HEATER);
-  
-  if (!bmp.begin(BMP280_ADDRESS_ALT)) {
-      #if LOGGING_ENABLED
-        Serial.println("BMP280 init fail");
-      #endif
+  if (shtOk) {
+    sht4.setPrecision(SHT4X_HIGH_PRECISION);
+    sht4.setHeater(SHT4X_NO_HEATER);
   }
-  
+
+  bmpOk = bmp.begin(BMP280_ADDRESS_ALT);
+
   scd4x.begin(Wire, SCD40_I2C_ADDR_62);
-  delay(30);
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
   pinMode(POWER_SENSING_PIN, INPUT);
 }
 
-void readSensorBMP(){
-  // Configure BMP280 for forced mode before measurement
+// The SCD40 keeps its periodic mode across ESP resets and start-while-measuring is a forbidden command, so always stop first (sensor responds again 500 ms after stop)
+bool startSCD() {
+  scd4x.stopPeriodicMeasurement();
+  lightSleepMs(500);
+
+  if (scd4x.startPeriodicMeasurement() == 0) return true;
+
+  scd4x.reinit();  // self-heal: reload sensor settings and retry once
+  lightSleepMs(30);
+  return scd4x.startPeriodicMeasurement() == 0;
+}
+
+// First sample arrives after the ~5 s signal update interval; sleep most of it, then poll data-ready (a read before that would just NACK)
+void finishSCD(bool scdStarted) {
+  if (!scdStarted) return;
+
+  lightSleepMs(4600);
+  bool dataReady = false;
+  for (int i = 0; i < 10 && !(scd4x.getDataReadyStatus(dataReady) == 0 && dataReady); i++) {
+    lightSleepMs(250);
+  }
+
+  if (dataReady) {
+    uint16_t co2Raw;
+    float t, h;
+    if (scd4x.readMeasurement(co2Raw, t, h) == 0 && co2Raw != 0) {
+      co2 = co2Raw;
+      tempSCD = t;
+      humiditySCD = h;
+    }
+  }
+
+  scd4x.stopPeriodicMeasurement();  // no 500 ms wait needed, the next command is a full cycle away
+
+  if (co2 > 10000) co2 = NAN;
+}
+
+void readSensorBMP() {
+  if (!bmpOk) bmpOk = bmp.begin(BMP280_ADDRESS_ALT);  // self-heal from a failed init
+  if (!bmpOk) return;
+
   bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
                   Adafruit_BMP280::SAMPLING_X1,  // temperature
                   Adafruit_BMP280::SAMPLING_X4,  // pressure (reduced from X16 for power savings)
                   Adafruit_BMP280::FILTER_OFF);
-  
   bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
-  pressure = bmp.readPressure() / 100.0f;  // Convert Pa to hPa
-  
-  if(pressure < 5000 && pressure > 500)
-    scd4x.setAmbientPressure((uint32_t)(pressure * 100));
+  float hPa = bmp.readPressure() / 100.0f;
 
-  if(pressure > 5000 || pressure < 300) pressure = -3.0f;
+  if (isnan(hPa) || hPa < 300 || hPa > 1200) return;  // pressure stays NaN
+
+  pressure = hPa;
+  scd4x.setAmbientPressure((uint32_t)(hPa * 100));  // allowed while the SCD40 measures
 }
 
-void readSensorSHT(){
+void readSensorSHT() {
+  if (!shtOk) return;
+
   sensors_event_t hum, temp;
-  sht4.getEvent(&hum, &temp);
+  bool ok = sht4.getEvent(&hum, &temp);
+  if (!ok) {  // self-heal: soft reset (sensor ready again within 1 ms) and retry once
+    sht4.reset();
+    delay(2);
+    ok = sht4.getEvent(&hum, &temp);
+  }
+  if (!ok) return;  // getEvent leaves the structs untouched on failure, never read them then
+
   tempAir = temp.temperature;
   humidity = hum.relative_humidity;
-
-  if(humidity < 0 || humidity > 100) humidity = -3.0f;
-  if(tempAir < -40 || tempAir > 85) tempAir = -3.0f;
-}
-
-void readSensorSCD(){
-  #if LOGGING_ENABLED
-    Serial.println("Initializing SCD40");
-  #endif
-
-  uint16_t error = scd4x.startPeriodicMeasurement();
-  if (error == 0) {
-    #if LOGGING_ENABLED
-      Serial.println("SCD40 started successfully");
-    #endif
-  } else {
-    #if LOGGING_ENABLED
-      Serial.print("SCD40 start error: ");
-      Serial.println(error);
-    #endif
-  }
-
-  uint16_t _co2Raw;
-  float _tempSCD, _humSCD;
-  
-  scd4x.readMeasurement(_co2Raw, _tempSCD, _humSCD);
-  #if LOGGING_ENABLED
-  delay(5000);
-  #else  
-  esp_sleep_enable_timer_wakeup(5000000); // ms
-  esp_light_sleep_start();
-  #endif
-  bool dataReady = false;
-  scd4x.getDataReadyStatus(dataReady);
-  
-  if (dataReady) {
-    uint16_t co2Raw;
-    int error = scd4x.readMeasurement(co2Raw, _tempSCD, _humSCD);
-    if (error == 0) {
-      co2 = co2Raw;
-      tempSCD = _tempSCD;
-      humiditySCD = _humSCD;
-    } else {
-      co2 = -error;
-    }
-  } else {
-    co2 = -1.0f;
-  }
-
-  scd4x.stopPeriodicMeasurement();
-
-  //if (co2 >= 0 && co2 < 300) {
-  //  delay(500);
-  //  uint16_t frcCorrection;
-  //  scd4x.performForcedRecalibration(400, frcCorrection);
-  //}
-
-  if(co2 > 10000) co2 = -3.0f;
+  if (humidity < 0 || humidity > 100) humidity = NAN;
+  if (tempAir < -40 || tempAir > 100) tempAir = NAN;
 }
 
 void readSensorBatteryVoltage(){
@@ -175,9 +203,10 @@ void readSensorBatteryVoltage(){
 void readSensors() {
   readSensorBatteryVoltage();
   tempESP = temperatureRead();
-  readSensorBMP();
+  bool scdStarted = startSCD();
+  readSensorBMP();  // runs during the SCD40 warm-up and feeds it the ambient pressure
   readSensorSHT();
-  readSensorSCD();
+  finishSCD(scdStarted);
 }
 
 // ############################### Internet ####################################

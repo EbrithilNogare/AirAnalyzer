@@ -329,13 +329,13 @@ void updateDisplay(
 			int valY = iconY + iconSize + 18;
 			String v;
 			switch (i) {
-				case 0: v = String(tempAir, 1) + "C"; break;
-				case 1: v = String(humidity, 0) + "%"; break;
+				case 0: v = isnan(tempAir) ? "--" : String(tempAir, 1) + "C"; break;
+				case 1: v = isnan(humidity) ? "--" : String(humidity, 0) + "%"; break;
 				case 2: v = sunriseTime; break;
 				case 3: v = " "; break;
 				case 4: v = sunsetTime; break;
-				case 5: v = String(co2,0); break;
-				case 6: v = String(pressure,0); break;
+				case 5: v = isnan(co2) ? "--" : String(co2,0); break;
+				case 6: v = isnan(pressure) ? "--" : String(pressure,0); break;
 			}
 			display.setFont(&FreeSansBold18pt7b);
 			int16_t tbx, tby; uint16_t tbw, tbh;
