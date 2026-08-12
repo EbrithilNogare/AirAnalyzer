@@ -87,43 +87,11 @@ void lightSleepMs(uint32_t ms) {
   esp_light_sleep_start();
 }
 
-bool i2cDeviceResponds(uint8_t address) {
-  Wire.beginTransmission(address);
-  return Wire.endTransmission() == 0;
-}
-
-// A slave interrupted mid-transfer (brownout, reset) can hold SDA low forever; no ESP reset fixes that, only clocking the stale bits out
-void recoverI2CBus() {
-  Wire.end();
-  pinMode(I2C_SDA_PIN, INPUT_PULLUP);
-  pinMode(I2C_SCL_PIN, OUTPUT_OPEN_DRAIN);
-  digitalWrite(I2C_SCL_PIN, HIGH);
-  for (int i = 0; i < 9 && digitalRead(I2C_SDA_PIN) == LOW; i++) {
-    digitalWrite(I2C_SCL_PIN, LOW);
-    delayMicroseconds(5);
-    digitalWrite(I2C_SCL_PIN, HIGH);
-    delayMicroseconds(5);
-  }
-  pinMode(I2C_SDA_PIN, OUTPUT_OPEN_DRAIN);
-  digitalWrite(I2C_SDA_PIN, LOW);
-  delayMicroseconds(5);
-  digitalWrite(I2C_SDA_PIN, HIGH);  // STOP condition (SDA low->high while SCL high) releases the bus
-  delayMicroseconds(5);
-  Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
-  delay(2);
-}
-
 void initSensors() {
   Wire.begin(I2C_SDA_PIN, I2C_SCL_PIN, 100000);
   delay(2);
 
-  if (!i2cDeviceResponds(SHT4x_DEFAULT_ADDR)) recoverI2CBus();
-
   shtOk = sht4.begin(&Wire);
-  if (!shtOk) {
-    recoverI2CBus();
-    shtOk = sht4.begin(&Wire);
-  }
   if (shtOk) {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     sht4.setHeater(SHT4X_NO_HEATER);
