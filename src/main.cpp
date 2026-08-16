@@ -81,10 +81,30 @@ void getMoonPhase(uint32_t epochTime) {
 
 bool shtOk = false, bmpOk = false;
 
+// Every sensor needs some time between the command that starts it and the read that collects the result.
+// Each one records the millis() deadline it becomes readable at, and the reader waits out whatever is left
+// of it - work done on another sensor in between counts towards the wait instead of being added to it.
+uint32_t shtReadyAtMs = 0, bmpReadyAtMs = 0, scdReadyAtMs = 0;
+
+const uint32_t SHT4X_RESET_MS = 2;      // soft reset, datasheet says ready within 1 ms
+const uint32_t BMP280_CONVERSION_MS = 13;  // 1.25 + 2*osrs_t + (2*osrs_p + 0.5) = 11.75 ms at X1 temp / X4 pressure
+const uint32_t SCD40_STOP_MS = 500;     // sensor ignores commands until this elapses after a stop
+const uint32_t SCD40_REINIT_MS = 30;
+const uint32_t SCD40_FIRST_SAMPLE_MS = 5000;  // signal update interval
+
 // Sleep the CPU while a sensor works; radios are still off at this point in the cycle so light sleep is safe
 void lightSleepMs(uint32_t ms) {
   esp_sleep_enable_timer_wakeup((uint64_t)ms * 1000ULL);
   esp_light_sleep_start();
+}
+
+// millis() keeps counting across light sleep, so the deadlines stay comparable either way. Short waits use
+// delay(), the light sleep entry/exit costs more than a couple of milliseconds of running.
+void waitUntilMs(uint32_t readyAtMs) {
+  int32_t remainingMs = (int32_t)(readyAtMs - millis());  // signed difference, so a passed deadline is negative
+  if (remainingMs <= 0) return;
+  if (remainingMs < 20) delay(remainingMs);
+  else lightSleepMs((uint32_t)remainingMs);
 }
 
 void initSensors() {
@@ -95,11 +115,14 @@ void initSensors() {
   if (shtOk) {
     sht4.setPrecision(SHT4X_HIGH_PRECISION);
     sht4.setHeater(SHT4X_NO_HEATER);
+    shtReadyAtMs = millis() + SHT4X_RESET_MS;  // begin() issues a soft reset
   }
 
   bmpOk = bmp.begin(BMP280_ADDRESS_ALT);
+  bmpReadyAtMs = millis();  // begin() already waits out its own settling time
 
   scd4x.begin(Wire, SCD40_I2C_ADDR_62);
+  scdReadyAtMs = millis();
 
   analogReadResolution(12);
   analogSetAttenuation(ADC_11db);
@@ -108,21 +131,30 @@ void initSensors() {
 
 // The SCD40 keeps its periodic mode across ESP resets and start-while-measuring is a forbidden command, so always stop first (sensor responds again 500 ms after stop)
 bool startSCD() {
+  waitUntilMs(scdReadyAtMs);
   scd4x.stopPeriodicMeasurement();
-  lightSleepMs(500);
+  scdReadyAtMs = millis() + SCD40_STOP_MS;
+  waitUntilMs(scdReadyAtMs);
 
-  if (scd4x.startPeriodicMeasurement() == 0) return true;
+  if (scd4x.startPeriodicMeasurement() == 0) {
+    scdReadyAtMs = millis() + SCD40_FIRST_SAMPLE_MS;
+    return true;
+  }
 
   scd4x.reinit();  // self-heal: reload sensor settings and retry once
-  lightSleepMs(30);
-  return scd4x.startPeriodicMeasurement() == 0;
+  scdReadyAtMs = millis() + SCD40_REINIT_MS;
+  waitUntilMs(scdReadyAtMs);
+  if (scd4x.startPeriodicMeasurement() != 0) return false;
+
+  scdReadyAtMs = millis() + SCD40_FIRST_SAMPLE_MS;
+  return true;
 }
 
 // First sample arrives after the ~5 s signal update interval; sleep most of it, then poll data-ready (a read before that would just NACK)
 void finishSCD(bool scdStarted) {
   if (!scdStarted) return;
 
-  lightSleepMs(4600);
+  waitUntilMs(scdReadyAtMs);  // whatever the BMP280 and SHT4x took already counts towards the 5 s
   bool dataReady = false;
   for (int i = 0; i < 10 && !(scd4x.getDataReadyStatus(dataReady) == 0 && dataReady); i++) {
     lightSleepMs(250);
@@ -138,20 +170,29 @@ void finishSCD(bool scdStarted) {
     }
   }
 
-  scd4x.stopPeriodicMeasurement();  // no 500 ms wait needed, the next command is a full cycle away
+  scd4x.stopPeriodicMeasurement();
+  scdReadyAtMs = millis() + SCD40_STOP_MS;  // not waited out here, the next command is a full cycle away
 
   if (co2 > 10000) co2 = NAN;
 }
 
 void readSensorBMP() {
-  if (!bmpOk) bmpOk = bmp.begin(BMP280_ADDRESS_ALT);  // self-heal from a failed init
+  if (!bmpOk) {
+    bmpOk = bmp.begin(BMP280_ADDRESS_ALT);  // self-heal from a failed init
+    bmpReadyAtMs = millis();
+  }
   if (!bmpOk) return;
 
+  waitUntilMs(bmpReadyAtMs);
   bmp.setSampling(Adafruit_BMP280::MODE_FORCED,
                   Adafruit_BMP280::SAMPLING_X1,  // temperature
                   Adafruit_BMP280::SAMPLING_X4,  // pressure (reduced from X16 for power savings)
                   Adafruit_BMP280::FILTER_OFF);
   bmp.takeForcedMeasurement();  // Wake, measure, return to sleep
+  // takeForcedMeasurement polls the status bit immediately after triggering and the chip does not raise it
+  // instantly, so the poll can fall through and the read return the previous conversion
+  bmpReadyAtMs = millis() + BMP280_CONVERSION_MS;
+  waitUntilMs(bmpReadyAtMs);
   float hPa = bmp.readPressure() / 100.0f;
 
   if (isnan(hPa) || hPa < 300 || hPa > 1200) return;  // pressure stays NaN
@@ -163,11 +204,13 @@ void readSensorBMP() {
 void readSensorSHT() {
   if (!shtOk) return;
 
+  waitUntilMs(shtReadyAtMs);
   sensors_event_t hum, temp;
-  bool ok = sht4.getEvent(&hum, &temp);
+  bool ok = sht4.getEvent(&hum, &temp);  // getEvent blocks for the conversion itself
   if (!ok) {  // self-heal: soft reset (sensor ready again within 1 ms) and retry once
     sht4.reset();
-    delay(2);
+    shtReadyAtMs = millis() + SHT4X_RESET_MS;
+    waitUntilMs(shtReadyAtMs);
     ok = sht4.getEvent(&hum, &temp);
   }
   if (!ok) return;  // getEvent leaves the structs untouched on failure, never read them then

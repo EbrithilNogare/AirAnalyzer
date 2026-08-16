@@ -11,3 +11,5 @@ include/config.h
 tools/preview/preview
 tools/preview/out.ppm
 tools/preview/out.png
+
+*.blend1
