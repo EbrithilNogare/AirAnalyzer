@@ -13,3 +13,4 @@ tools/preview/out.ppm
 tools/preview/out.png
 
 *.blend1
+.DS_Store

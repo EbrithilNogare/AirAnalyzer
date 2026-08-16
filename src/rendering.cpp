@@ -7,23 +7,6 @@
 #include "icons/co2.icon.h"
 #include "icons/moon.icon.h"
 
-void largeAntiGhosting(DisplayType& display) {
-  display.fillScreen(GxEPD_WHITE);
-  display.nextPage();
-  delay(5);
-}
-
-void smallAntiGhosting(DisplayType& display) {
-  display.setPartialWindow(0, GxEPD2_397_GDEM0397T81::HEIGHT - 50, GxEPD2_397_GDEM0397T81::WIDTH_VISIBLE, 30);
-  display.fillScreen(GxEPD_BLACK);
-  display.nextPage();
-  delay(5);
-  display.setPartialWindow(0, GxEPD2_397_GDEM0397T81::HEIGHT - 50, GxEPD2_397_GDEM0397T81::WIDTH_VISIBLE, 30);
-  display.fillScreen(GxEPD_WHITE);
-  display.nextPage();
-  delay(5);
-}
-
 inline void drawDashedHLine(DisplayType& display, int x1, int x2, int y, int onLen = 3, int offLen = 3) {
 	for (int xx = x1; xx <= x2; xx += onLen + offLen) {
 		int segW = std::min(onLen, x2 - xx + 1);
@@ -310,9 +293,15 @@ void updateDisplay(
 		int forecastStartHour,
 		bool weatherDataValid,
 		float moonPhase,
-		int batteryPercent
+		int batteryPercent,
+		bool fullRefresh
 	) {
-	display.setPartialWindow(0, 0, display.width(), display.height());
+	// A partial refresh only nudges the pixels that changed and leaves a faint copy of what it replaced,
+	// so redrawing a moved graph over an old one shadows the previous curves. A full refresh drives every
+	// pixel through the complete waveform and clears them, at the cost of a visible flash and ~1.9 s
+	// instead of ~0.4 s. The caller spends that only when the drawing actually changes shape.
+	if (fullRefresh) display.setFullWindow();
+	else display.setPartialWindow(0, 0, display.width(), display.height());
 	display.firstPage();
 	do {
 		display.fillScreen(GxEPD_WHITE);

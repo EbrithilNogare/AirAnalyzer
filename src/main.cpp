@@ -50,7 +50,7 @@ RTC_DATA_ATTR uint64_t rtc_awakeUsSinceSync = 0;
 
 RTC_DATA_ATTR int rtc_batteryPercent = 0;  // battery percentage shown on display
 RTC_DATA_ATTR uint32_t rtc_lastFullUpdateEpoch = 0;  // Epoch of last display refresh
-RTC_DATA_ATTR uint32_t rtc_displayUpdateCount = 0;   // drives the anti-ghosting flash cadence
+RTC_DATA_ATTR uint32_t rtc_lastGraphHash = 0;        // fingerprint of the graph as it is currently on the panel
 
 // Last known-good association, replayed on the next wake to skip the channel scan and DHCP
 RTC_DATA_ATTR uint8_t rtc_wifiBssid[6] = {0};
@@ -383,6 +383,24 @@ void fetchWeatherForecast(uint32_t currentEpoch) {
 
 // ################################ Display ####################################
 
+// Fingerprint of everything the graph draws, so a redraw can tell whether the shape on the panel is still
+// the right one. Values are quantised to a tenth, well below what a pixel can show, so float noise in an
+// otherwise identical forecast does not read as a change.
+uint32_t graphContentHash(const float* temp, const float* apparentTemp, const float* rain, int hours, int startHour, bool valid) {
+  uint32_t hash = 2166136261u;  // FNV-1a
+  auto mix = [&hash](uint32_t v) { hash = (hash ^ v) * 16777619u; };
+
+  mix(valid ? 1u : 0u);
+  mix((uint32_t)hours);
+  mix((uint32_t)startHour);
+  for (int i = 0; i < hours; i++) {
+    mix((uint32_t)lroundf(temp[i] * 10.0f));
+    mix((uint32_t)lroundf(apparentTemp[i] * 10.0f));
+    mix((uint32_t)lroundf(rain[i] * 10.0f));
+  }
+  return hash;
+}
+
 void initDisplay1() {
   // BC327 is PNP transistor - LOW turns it ON (provides power to display)
   pinMode(EPD_TRANSISTOR_PIN, OUTPUT);
@@ -554,11 +572,6 @@ void setup() {
     delay(100);  // rail settling time, this no longer overlaps the WiFi phase
     initDisplay2();
 
-    if (ANTI_GHOSTING_EVERY_N_UPDATES <= 1 || rtc_displayUpdateCount % ANTI_GHOSTING_EVERY_N_UPDATES == 0) {
-      largeAntiGhosting(display);
-    }
-    rtc_displayUpdateCount++;
-
     // Cached forecast can be a few hours old, so start the graph at the current hour rather than at
     // the hour the data was fetched
     int forecastOffset = 0;
@@ -568,6 +581,17 @@ void setup() {
     int maxOffset = max(rtc_forecastValidHours - FORECAST_DISPLAY_HOURS, 0);
     forecastOffset = constrain(forecastOffset, 0, maxOffset);
     int forecastHours = min(FORECAST_DISPLAY_HOURS, rtc_forecastValidHours - forecastOffset);
+
+    bool graphValid = rtc_weatherDataValid && forecastHours > 0;
+    int graphStartHour = (rtc_forecastStartHour + forecastOffset) % 24;
+    uint32_t graphHash = graphContentHash(rtc_forecastTemp + forecastOffset, rtc_forecastApparentTemp + forecastOffset,
+                                          rtc_forecastRain + forecastOffset, forecastHours, graphStartHour, graphValid);
+
+    // The graph is the only thing on the panel large enough for partial-refresh shadows to be noticeable,
+    // so a full refresh is spent exactly when its shape moves: a new forecast, or the hourly scroll of the
+    // window into the cached one. Everything else is redrawn partially.
+    bool fullRefresh = firstRun || graphHash != rtc_lastGraphHash;
+    rtc_lastGraphHash = graphHash;
 
     getMoonPhase(currentEpoch);
     rtc_batteryPercent = constrain((int)((batteryVoltage - 3.3f) / (4.1f - 3.3f) * 100.0f), 0, 99);
@@ -583,10 +607,11 @@ void setup() {
       rtc_forecastApparentTemp + forecastOffset,
       rtc_forecastRain + forecastOffset,
       forecastHours,
-      (rtc_forecastStartHour + forecastOffset) % 24,
-      rtc_weatherDataValid && forecastHours > 0,
+      graphStartHour,
+      graphValid,
       moonPhase,
-      rtc_batteryPercent
+      rtc_batteryPercent,
+      fullRefresh
     );
     rtc_lastFullUpdateEpoch = currentEpoch;
 

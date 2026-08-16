@@ -7,11 +7,7 @@
 
 typedef GxEPD2_BW<GxEPD2_397_GDEM0397T81, GxEPD2_397_GDEM0397T81::HEIGHT> DisplayType;
 
-void largeAntiGhosting(DisplayType& display);
-
-void smallAntiGhosting(DisplayType& display);
-
-void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase, int batteryPercent);
+void updateDisplay(DisplayType& display, float tempAir, float humidity, float co2, float pressure, const String& sunriseTime, const String& sunsetTime, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, bool weatherDataValid, float moonPhase, int batteryPercent, bool fullRefresh);
 
 void drawWeatherForecast(DisplayType& display, const float* forecastTemp, const float* forecastApparentTemp, const float* forecastRain, int forecastHours, int forecastStartHour, const String& sunriseTime, const String& sunsetTime, bool weatherDataValid);
 

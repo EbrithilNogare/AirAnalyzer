@@ -23,9 +23,6 @@ static constexpr uint32_t WEATHER_FETCH_ANCHOR_UTC_SECONDS = 2 * 3600 + 35 * 60;
 static constexpr int FORECAST_FETCH_HOURS = 28;
 static constexpr int FORECAST_DISPLAY_HOURS = 24;
 
-// Ghosting flash costs a whole extra panel refresh. 1 restores the old every-redraw behaviour.
-static constexpr uint32_t ANTI_GHOSTING_EVERY_N_UPDATES = 6;
-
 // How often to re-sync the clock with NTP. main.cpp additionally measures the deep-sleep oscillator
 // error against these syncs and pre-compensates, so this does not have to be frequent to stay accurate.
 static constexpr uint32_t NTP_INTERVAL_SECONDS = 86400;  // 1 day
